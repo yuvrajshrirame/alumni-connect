@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   StyleSheet, 
   Text, 
@@ -16,7 +16,8 @@ import {
   Modal,
   Share,
   BackHandler,
-  Linking 
+  Linking,
+  FlatList 
 } from 'react-native';
 import { MaterialIcons, Ionicons, FontAwesome5 } from '@expo/vector-icons';
 
@@ -47,7 +48,9 @@ import {
   setDoc,
   increment,
   arrayUnion,
-  arrayRemove
+  arrayRemove,
+  onSnapshot,
+  serverTimestamp
 } from 'firebase/firestore';
 
 // --- 2. FIREBASE CONFIGURATION ---
@@ -81,17 +84,24 @@ export default function App() {
   // Navigation & Data State
   const [currentTab, setCurrentTab] = useState('home');
   const [selectedAlum, setSelectedAlum] = useState(null);
+  const [activeChatRequest, setActiveChatRequest] = useState(null); 
+  
+  // Data Lists
   const [myRequests, setMyRequests] = useState([]); 
   const [incomingRequests, setIncomingRequests] = useState([]); 
   const [alumniList, setAlumniList] = useState([]); 
   const [feedPosts, setFeedPosts] = useState([]);
+  const [notifications, setNotifications] = useState([]);
   
   // Screen Modes
   const [isEditingProfile, setIsEditingProfile] = useState(false); 
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showNewPostModal, setShowNewPostModal] = useState(false);
 
   // --- BACK HANDLER LOGIC ---
   useEffect(() => {
     const backAction = () => {
+      if (activeChatRequest) { setActiveChatRequest(null); return true; }
       if (selectedAlum) { setSelectedAlum(null); return true; }
       if (isEditingProfile) { setIsEditingProfile(false); return true; }
       if (currentTab !== 'home') { setCurrentTab('home'); return true; }
@@ -99,7 +109,7 @@ export default function App() {
     };
     const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
     return () => backHandler.remove();
-  }, [currentTab, selectedAlum, isEditingProfile]);
+  }, [currentTab, selectedAlum, isEditingProfile, activeChatRequest]);
 
   // --- APP LAUNCH & AUTH LISTENER ---
   useEffect(() => {
@@ -108,28 +118,20 @@ export default function App() {
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
-        setIsLoading(true);
-        // CRITICAL FIX: Check if user has a profile in DB. If not, force Onboarding.
         try {
             const userDocRef = doc(db, "users", currentUser.uid);
             const userDocSnap = await getDoc(userDocRef);
 
             if (userDocSnap.exists()) {
-                // User exists, load data
                 const data = userDocSnap.data();
-                setUser({ ...data, uid: currentUser.uid }); // Ensure UID is set
+                setUser({ ...data, uid: currentUser.uid });
                 fetchInitialData(currentUser.uid, data.role);
                 setIsOnboarding(false);
             } else {
-                // User logged in but no DB record? Force Onboarding.
                 setIsOnboarding(true);
-                // Set temporary user object so we pass the "if (!user)" check in render
                 setUser({ uid: currentUser.uid, email: currentUser.email, name: currentUser.displayName });
             }
-        } catch (e) {
-            console.log("Auth check error", e);
-        }
-        setIsLoading(false);
+        } catch (e) { console.log("Auth check error", e); }
       } else {
         setUser(null);
         setIsOnboarding(false);
@@ -152,7 +154,6 @@ export default function App() {
       const list = [];
       querySnapshot.forEach((doc) => {
         const data = doc.data();
-        // STRICT FILTER
         if (!data.name || !data.uid) return; 
         if (user && data.uid === user.uid) return;
         if (data.role !== 'Alumni') return;
@@ -168,23 +169,26 @@ export default function App() {
     try {
       const fieldToQuery = role === 'Alumni' ? 'mentorId' : 'senderId';
       const q = query(collection(db, "requests"), where(fieldToQuery, "==", userId));
-      const querySnapshot = await getDocs(q);
-      const reqs = [];
-      querySnapshot.forEach((doc) => reqs.push({ id: doc.id, ...doc.data() }));
       
-      if (role === 'Alumni') setIncomingRequests(reqs);
-      else setMyRequests(reqs);
+      const unsubscribe = onSnapshot(q, (querySnapshot) => {
+        const reqs = [];
+        querySnapshot.forEach((doc) => reqs.push({ id: doc.id, ...doc.data() }));
+        if (role === 'Alumni') setIncomingRequests(reqs);
+        else setMyRequests(reqs);
+      });
+      return unsubscribe;
     } catch (e) { console.log(e); }
   };
 
   const fetchFeed = async () => {
     if (!db) return;
     try {
-      const q = query(collection(db, "posts"), limit(20));
+      const q = query(collection(db, "posts"), limit(50));
       const querySnapshot = await getDocs(q);
       const posts = [];
       querySnapshot.forEach((doc) => posts.push({ id: doc.id, ...doc.data() }));
-      setFeedPosts(posts.reverse());
+      posts.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      setFeedPosts(posts);
     } catch (e) { console.log("Feed error", e); }
   };
 
@@ -197,10 +201,8 @@ export default function App() {
 
   const handleSignup = async (email, password) => {
     setIsLoading(true);
-    try { 
-      await createUserWithEmailAndPassword(auth, email, password);
-      // Auth listener will catch the missing DB profile and trigger Onboarding
-    } catch (error) { Alert.alert("Signup Failed", error.message); setIsLoading(false); }
+    try { await createUserWithEmailAndPassword(auth, email, password); } 
+    catch (error) { Alert.alert("Signup Failed", error.message); setIsLoading(false); }
   };
 
   const handleOnboardingComplete = async (name, role, bio, company, experience, batch) => {
@@ -209,19 +211,20 @@ export default function App() {
       const currentUser = auth.currentUser;
       await updateProfile(currentUser, { displayName: name, photoURL: role });
       
+      const stats = { rating: 0.0, ratingCount: 0, sessions: 0, experience: experience || 0 };
+
       const userData = {
         name, email: currentUser.email, role, bio, 
         company: company || 'N/A',
         batch: batch || new Date().getFullYear().toString(),
         uid: currentUser.uid,
         experience: experience || 0,
-        stats: { rating: 5.0, ratingCount: 1, sessions: 0, experience: experience || 0 }
+        stats: stats,
+        createdAt: serverTimestamp()
       };
 
-      // 1. Save to Master 'users' collection (for everyone)
       await setDoc(doc(db, "users", currentUser.uid), userData);
 
-      // 2. If Alumni, ALSO save to 'alumni' collection (for directory)
       if (role === 'Alumni') {
         await setDoc(doc(db, "alumni", currentUser.uid), {
             ...userData,
@@ -259,11 +262,9 @@ export default function App() {
       if (newEmail && newEmail !== user.email) await updateEmail(auth.currentUser, newEmail);
       if (newPassword && newPassword.length > 0) await updatePassword(auth.currentUser, newPassword);
 
-      // Update in Firestore 'users'
       const userRef = doc(db, "users", user.uid);
       await updateDoc(userRef, { name: newName, bio: newBio, company: newCompany });
 
-      // Update in 'alumni' if applicable
       if (user.role === 'Alumni') {
           const alumRef = doc(db, "alumni", user.uid);
           await updateDoc(alumRef, { name: newName, bio: newBio, company: newCompany });
@@ -272,9 +273,7 @@ export default function App() {
       setUser({ ...user, name: newName, email: newEmail || user.email, bio: newBio, company: newCompany });
       setIsEditingProfile(false);
       Alert.alert("Success", "Profile updated.");
-    } catch (error) {
-      Alert.alert("Error", error.message);
-    }
+    } catch (error) { Alert.alert("Error", error.message); }
     setIsLoading(false);
   };
 
@@ -284,7 +283,8 @@ export default function App() {
     try {
       await addDoc(collection(db, "posts"), {
         author: user.name, authorRole: user.role, authorCompany: user.company,
-        content: content, date: new Date().toLocaleDateString(), likedBy: [], comments: []
+        content: content, date: new Date().toLocaleDateString(), 
+        createdAt: serverTimestamp(), likedBy: [], comments: []
       });
       fetchFeed(); 
       Alert.alert("Posted", "Shared to community.");
@@ -304,49 +304,75 @@ export default function App() {
       } catch (e) { console.log("Like error", e); }
   };
 
-  const handleCommentPost = async (postId, commentText) => {
+  const handleCommentPost = async (postId, commentText, parentId = null) => {
       if (!commentText.trim()) return;
       try {
           const postRef = doc(db, "posts", postId);
-          await updateDoc(postRef, { 
-              comments: arrayUnion({ user: user.name, text: commentText, role: user.role }) 
-          });
+          const postSnap = await getDoc(postRef);
+          const postData = postSnap.data();
+          let updatedComments = postData.comments || [];
+
+          const newComment = {
+              id: Date.now().toString(),
+              user: user.name,
+              text: commentText,
+              role: user.role,
+              replies: []
+          };
+
+          if (parentId) {
+              updatedComments = updatedComments.map(c => {
+                  if (c.id === parentId) {
+                      return { ...c, replies: [...(c.replies || []), newComment] };
+                  }
+                  return c;
+              });
+          } else {
+              updatedComments.push(newComment);
+          }
+
+          await updateDoc(postRef, { comments: updatedComments });
           fetchFeed(); 
       } catch (e) { Alert.alert("Error", "Could not comment."); }
   };
 
   // --- MENTOR ACTIONS ---
-  const sendRequest = async (alum, message, mode) => {
+  const sendRequest = async (alum, message) => {
     if (!user || !db) return;
     try {
       await addDoc(collection(db, "requests"), {
         senderId: user.uid, senderName: user.name,
         mentorId: alum.uid, mentorName: alum.name,
         status: 'Pending', date: new Date().toLocaleDateString(),
-        message: message, mode: mode, 
-        mentorEmail: alum.email // Save email for contact later
+        message: message, 
+        mentorEmail: alum.email 
       });
       Alert.alert("Request Sent", "Track status in Requests tab.");
       setSelectedAlum(null); 
       setCurrentTab('requests'); 
-      fetchRequests(user.uid, user.role);
     } catch (e) { Alert.alert("Error", e.message); }
   };
 
   const handleRateMentor = async (alum, rating) => {
     try {
         const alumRef = doc(db, "alumni", alum.id);
-        const currentStats = alum.stats || { rating: 5.0, ratingCount: 1, experience: 0, sessions: 0 };
-        const newCount = (currentStats.ratingCount || 1) + 1;
-        const currentTotal = (currentStats.rating || 5.0) * (currentStats.ratingCount || 1);
-        const newRating = ((currentTotal + rating) / newCount).toFixed(1);
+        const alumSnap = await getDoc(alumRef);
+        const currentStats = alumSnap.data().stats || { rating: 0, ratingCount: 0, experience: 0 };
+        
+        const oldRating = currentStats.rating || 0;
+        const oldCount = currentStats.ratingCount || 0;
+        const newCount = oldCount + 1;
+        const newRating = ((oldRating * oldCount) + rating) / newCount;
 
-        await updateDoc(alumRef, {
-            "stats.rating": parseFloat(newRating),
-            "stats.ratingCount": newCount
-        });
+        const updatedStats = { 
+            ...currentStats, 
+            rating: parseFloat(newRating.toFixed(1)), 
+            ratingCount: newCount 
+        };
+
+        await updateDoc(alumRef, { stats: updatedStats });
         Alert.alert("Success", `You rated ${alum.name} ${rating} stars.`);
-        setSelectedAlum({ ...alum, stats: { ...currentStats, rating: parseFloat(newRating), ratingCount: newCount } });
+        setSelectedAlum({ ...alum, stats: updatedStats });
     } catch (e) { Alert.alert("Error", "Could not submit rating."); }
   };
 
@@ -354,15 +380,12 @@ export default function App() {
     try {
       const reqRef = doc(db, "requests", reqId);
       await updateDoc(reqRef, { status: newStatus });
-      // Refresh lists
-      fetchRequests(user.uid, user.role);
     } catch (e) { Alert.alert("Error", "Could not update."); }
   };
 
   // --- UI RENDERERS ---
   if (isSplashVisible) return <SplashScreen />;
 
-  // FORCE ONBOARDING IF LOGGED IN BUT NO PROFILE
   if (isOnboarding && user) {
       return (
         <View style={styles.webBackground}>
@@ -395,7 +418,7 @@ export default function App() {
       <View style={styles.webBackground}>
         <View style={styles.webContainer}>
           
-          {!selectedAlum && !isEditingProfile && (
+          {!selectedAlum && !isEditingProfile && !activeChatRequest && (
             <View style={styles.headerBar}>
               <Text style={styles.headerTitle}>
                 {currentTab === 'home' ? 'Community' : 
@@ -409,7 +432,13 @@ export default function App() {
           )}
 
           <View style={styles.contentArea}>
-            {selectedAlum ? (
+            {activeChatRequest ? (
+              <ChatScreen 
+                request={activeChatRequest}
+                currentUser={user}
+                onBack={() => setActiveChatRequest(null)}
+              />
+            ) : selectedAlum ? (
               <DetailScreen 
                 alum={selectedAlum} 
                 currentUserUid={user.uid}
@@ -447,7 +476,7 @@ export default function App() {
                     requests={user.role === 'Alumni' ? incomingRequests : myRequests} 
                     isAlumni={user.role === 'Alumni'}
                     onAction={handleRequestAction}
-                    onRefresh={() => fetchRequests(user.uid, user.role)}
+                    onChat={(req) => setActiveChatRequest(req)}
                   />
                 )}
                 {currentTab === 'profile' && (
@@ -461,7 +490,7 @@ export default function App() {
             )}
           </View>
 
-          {!selectedAlum && !isEditingProfile && (
+          {!selectedAlum && !isEditingProfile && !activeChatRequest && (
             <View style={styles.bottomNavWrapper}>
               <View style={styles.bottomNav}>
                 <TabItem icon="home" label="Feed" active={currentTab === 'home'} onPress={() => setCurrentTab('home')} />
@@ -478,12 +507,78 @@ export default function App() {
   );
 }
 
-// --- SCREENS ---
+// --- COMPONENT DEFINITIONS ---
+
+const ChatScreen = ({ request, currentUser, onBack }) => {
+    const [messages, setMessages] = useState([]);
+    const [inputText, setInputText] = useState('');
+    const flatListRef = useRef();
+
+    useEffect(() => {
+        const q = query(collection(db, "requests", request.id, "messages"), orderBy("createdAt", "asc"));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const msgs = [];
+            snapshot.forEach(doc => msgs.push({id: doc.id, ...doc.data()}));
+            setMessages(msgs);
+        });
+        return unsubscribe;
+    }, [request.id]);
+
+    const sendMessage = async () => {
+        if(!inputText.trim()) return;
+        try {
+            await addDoc(collection(db, "requests", request.id, "messages"), {
+                text: inputText,
+                senderId: currentUser.uid,
+                senderName: currentUser.name,
+                createdAt: serverTimestamp()
+            });
+            setInputText('');
+        } catch(e) { Alert.alert("Error", "Failed to send."); }
+    };
+
+    return (
+        <View style={styles.screenContainer}>
+            <View style={styles.headerRow}>
+                <TouchableOpacity onPress={onBack}><Ionicons name="arrow-back" size={24} /></TouchableOpacity>
+                <Text style={styles.headerTitle}>Chat</Text>
+                <View style={{width: 24}} />
+            </View>
+            <FlatList 
+                ref={flatListRef}
+                data={messages}
+                keyExtractor={item => item.id}
+                onContentSizeChange={() => flatListRef.current?.scrollToEnd()}
+                renderItem={({item}) => {
+                    const isMe = item.senderId === currentUser.uid;
+                    return (
+                        <View style={[styles.msgBubble, isMe ? styles.msgMe : styles.msgOther]}>
+                            <Text style={[styles.msgText, isMe && {color:'#fff'}]}>{item.text}</Text>
+                        </View>
+                    );
+                }}
+                contentContainerStyle={{paddingBottom: 20}}
+            />
+            <View style={styles.chatInputBar}>
+                <TextInput 
+                    style={styles.chatInput} 
+                    placeholder="Type a message..." 
+                    value={inputText}
+                    onChangeText={setInputText}
+                />
+                <TouchableOpacity onPress={sendMessage}>
+                    <Ionicons name="send" size={24} color="#4F46E5" />
+                </TouchableOpacity>
+            </View>
+        </View>
+    );
+};
 
 const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
   const [text, setText] = useState('');
   const [commentText, setCommentText] = useState('');
-  const [activePostId, setActivePostId] = useState(null);
+  const [activePostId, setActivePostId] = useState(null); 
+  const [replyingTo, setReplyingTo] = useState(null); 
   
   return (
     <View style={styles.screenContainer}>
@@ -509,7 +604,6 @@ const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
         {posts.length === 0 && (
           <View style={styles.emptyState}>
             <Text style={styles.emptyText}>No posts yet.</Text>
-            <Text style={styles.emptySubText}>Be the first to share something!</Text>
           </View>
         )}
         {posts.map((post, index) => {
@@ -526,13 +620,28 @@ const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
               </View>
               <Text style={styles.postContent}>{post.content}</Text>
               
+              {/* NESTED COMMENTS */}
               {post.comments && post.comments.length > 0 && (
                   <View style={styles.commentSection}>
-                      {post.comments.map((c, i) => (
-                          <Text key={i} style={styles.commentText}>
-                              <Text style={{fontWeight: 'bold'}}>{c.user} {c.role === 'Alumni' && <Text style={{color: '#4F46E5', fontSize: 10}}>✓ Alumni</Text>}: </Text>
-                              {c.text}
-                          </Text>
+                      {post.comments.map((c) => (
+                          <View key={c.id} style={{marginBottom: 8}}>
+                              <TouchableOpacity onLongPress={() => { setActivePostId(post.id); setReplyingTo({id: c.id, user: c.user}); }}>
+                                <Text style={styles.commentText}>
+                                    <Text style={{fontWeight: 'bold'}}>{c.user} 
+                                    {c.role === 'Alumni' && <Text style={{color: '#4F46E5', fontSize: 10}}> ✓</Text>}
+                                    : </Text>
+                                    {c.text}
+                                </Text>
+                              </TouchableOpacity>
+                              {c.replies && c.replies.map(r => (
+                                  <Text key={r.id} style={[styles.commentText, {marginLeft: 15, color: '#666'}]}>
+                                      <Text style={{fontWeight: 'bold'}}>↳ {r.user}
+                                      {r.role === 'Alumni' && <Text style={{color: '#4F46E5', fontSize: 10}}> ✓</Text>}
+                                      : </Text> 
+                                      {r.text}
+                                  </Text>
+                              ))}
+                          </View>
                       ))}
                   </View>
               )}
@@ -542,26 +651,34 @@ const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
                   <Ionicons name={isLiked ? "heart" : "heart-outline"} size={20} color={isLiked ? "#EF4444" : "#6B7280"} />
                   <Text style={[styles.actionText, isLiked && {color: '#EF4444'}]}>{post.likedBy?.length || 0} Likes</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.actionItem} onPress={() => setActivePostId(activePostId === post.id ? null : post.id)}>
+                <TouchableOpacity style={styles.actionItem} onPress={() => { setActivePostId(activePostId === post.id ? null : post.id); setReplyingTo(null); }}>
                   <Ionicons name="chatbubble-outline" size={20} color="#6B7280" />
                   <Text style={styles.actionText}>Comment</Text>
                 </TouchableOpacity>
               </View>
 
               {activePostId === post.id && (
-                  <View style={{flexDirection: 'row', marginTop: 10}}>
-                      <TextInput 
-                          style={[styles.input, {flex: 1, marginBottom: 0}]} 
-                          placeholder="Write a comment..." 
-                          value={commentText}
-                          onChangeText={setCommentText}
-                      />
-                      <TouchableOpacity 
-                          style={{justifyContent: 'center', marginLeft: 10}}
-                          onPress={() => { onComment(post.id, commentText); setCommentText(''); setActivePostId(null); }}
-                      >
-                          <Text style={{color: '#4F46E5', fontWeight: 'bold'}}>Send</Text>
-                      </TouchableOpacity>
+                  <View style={{marginTop: 10}}>
+                      {replyingTo && <Text style={{fontSize:10, color:'#666', marginBottom:2}}>Replying to {replyingTo.user}...</Text>}
+                      <View style={{flexDirection: 'row'}}>
+                        <TextInput 
+                            style={[styles.input, {flex: 1, marginBottom: 0, paddingVertical: 8}]} 
+                            placeholder={replyingTo ? "Write a reply..." : "Write a comment..."} 
+                            value={commentText}
+                            onChangeText={setCommentText}
+                        />
+                        <TouchableOpacity 
+                            style={{justifyContent: 'center', marginLeft: 10}}
+                            onPress={() => { 
+                                onComment(post.id, commentText, replyingTo?.id); 
+                                setCommentText(''); 
+                                setActivePostId(null); 
+                                setReplyingTo(null);
+                            }}
+                        >
+                            <Text style={{color: '#4F46E5', fontWeight: 'bold'}}>Send</Text>
+                        </TouchableOpacity>
+                      </View>
                   </View>
               )}
             </View>
@@ -594,7 +711,7 @@ const MentorsScreen = ({ alumni, onSelect, onRefresh }) => {
                 <Text style={styles.mentorName}>{alum.name}</Text>
                 <Text style={styles.mentorRole}>{alum.role} at {alum.company}</Text>
                 <View style={{flexDirection: 'row', marginTop: 6, gap: 5}}>
-                  <View style={styles.statBadge}><Ionicons name="star" size={10} color="#F59E0B" /><Text style={styles.statText}>{alum.stats?.rating || 5.0}</Text></View>
+                  <View style={styles.statBadge}><Ionicons name="star" size={10} color="#F59E0B" /><Text style={styles.statText}>{alum.stats?.rating || 0.0}</Text></View>
                   <View style={styles.statBadge}><Text style={styles.statText}>{alum.stats?.experience || 0} Yr Exp</Text></View>
                 </View>
               </View>
@@ -608,10 +725,9 @@ const MentorsScreen = ({ alumni, onSelect, onRefresh }) => {
 
 const DetailScreen = ({ alum, currentUserUid, onBack, onConnect, onRate }) => {
   const [message, setMessage] = useState('');
-  const [mode, setMode] = useState('Video Call');
   const [showRating, setShowRating] = useState(false);
   const isSelf = alum.uid === currentUserUid;
-  const stats = alum.stats || { rating: 5.0, sessions: 0, experience: 0 };
+  const stats = alum.stats || { rating: 0.0, sessions: 0, experience: 0 };
 
   return (
     <View style={styles.screenContainer}>
@@ -638,15 +754,8 @@ const DetailScreen = ({ alum, currentUserUid, onBack, onConnect, onRate }) => {
         {!isSelf && (
           <View style={styles.detailSection}>
             <Text style={styles.sectionHeader}>Request Session</Text>
-            <View style={styles.modeRow}>
-              {['Video Call', 'Audio', 'Chat'].map(m => (
-                <TouchableOpacity key={m} onPress={() => setMode(m)} style={[styles.modeChip, mode === m && styles.modeChipActive]}>
-                  <Text style={[styles.modeText, mode === m && {color:'#fff'}]}>{m}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <TextInput style={styles.msgInput} placeholder="Topic..." multiline value={message} onChangeText={setMessage} />
-            <TouchableOpacity style={styles.primaryButton} onPress={() => onConnect(alum, message, mode)}>
+            <TextInput style={styles.msgInput} placeholder="Why do you want to connect?" multiline value={message} onChangeText={setMessage} />
+            <TouchableOpacity style={styles.primaryButton} onPress={() => onConnect(alum, message)}>
               <Text style={styles.buttonText}>Send Request</Text>
             </TouchableOpacity>
 
@@ -703,7 +812,7 @@ const ProfileScreen = ({ user, onLogout, onEdit }) => {
         </View>
 
         <View style={{flexDirection:'row', gap: 10, marginTop: 15}}>
-          <TouchableOpacity style={styles.smallBtnOutline} onPress={onEdit}><Text style={{color:'#4F46E5'}}>Edit Profile</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.smallBtnOutline} onPress={onEdit}><Text style={{color:'#4F46E5'}}>Edit</Text></TouchableOpacity>
           <TouchableOpacity style={styles.smallBtnOutline} onPress={handleShare}><Text style={{color:'#4F46E5'}}>Share</Text></TouchableOpacity>
         </View>
       </View>
@@ -760,7 +869,7 @@ const EditProfileScreen = ({ user, onCancel, onSave }) => {
   );
 };
 
-const RequestsScreen = ({ requests, isAlumni, onAction, onRefresh }) => (
+const RequestsScreen = ({ requests, isAlumni, onAction, onChat, onRefresh }) => (
   <View style={styles.screenContainer}>
     <TouchableOpacity onPress={onRefresh} style={{alignSelf: 'flex-end', marginBottom: 10}}>
       <Text style={{color: '#4F46E5'}}>Refresh</Text>
@@ -774,22 +883,17 @@ const RequestsScreen = ({ requests, isAlumni, onAction, onRefresh }) => (
             <View style={[styles.reqStrip, {backgroundColor: req.status === 'Accepted' ? '#10B981' : '#F59E0B'}]} />
             <View style={{padding: 15}}>
               <Text style={styles.reqHeader}>{isAlumni ? req.senderName : `To: ${req.mentorName}`}</Text>
-              <Text style={styles.reqDate}>{req.date} • {req.mode}</Text>
+              <Text style={styles.reqDate}>{req.date}</Text>
               <Text style={styles.reqMsg}>{req.message}</Text>
               
-              {/* ACCEPTED VIEW */}
-              {req.status === 'Accepted' && !isAlumni && (
-                  <View style={{marginTop: 10, backgroundColor: '#ECFDF5', padding: 10, borderRadius: 8}}>
-                      <Text style={{color: '#065F46', fontWeight: 'bold', marginBottom: 5}}>Request Accepted! 🎉</Text>
-                      <Text style={{fontSize: 12, color: '#065F46'}}>Please contact your mentor at:</Text>
-                      <Text style={{fontSize: 14, fontWeight: 'bold', color: '#065F46', marginVertical: 5}}>{req.mentorEmail || 'Email not provided'}</Text>
-                      <TouchableOpacity 
-                        style={{backgroundColor: '#059669', padding: 8, borderRadius: 5, alignItems: 'center'}}
-                        onPress={() => req.mentorEmail && Linking.openURL(`mailto:${req.mentorEmail}`)}
-                      >
-                          <Text style={{color: '#fff', fontWeight: 'bold'}}>Open Email</Text>
-                      </TouchableOpacity>
-                  </View>
+              {/* ACCEPTED VIEW - CHAT BUTTON */}
+              {req.status === 'Accepted' && (
+                  <TouchableOpacity 
+                    style={[styles.actionBtn, {backgroundColor: '#4F46E5', marginTop: 10}]}
+                    onPress={() => onChat(req)}
+                  >
+                      <Text style={{color: '#fff', fontWeight: 'bold'}}>💬 Chat Now</Text>
+                  </TouchableOpacity>
               )}
 
               {isAlumni && req.status === 'Pending' && (
@@ -986,6 +1090,14 @@ const styles = StyleSheet.create({
   actionBtn: { flex: 1, padding: 8, borderRadius: 8, alignItems: 'center' },
   emptyState: { alignItems: 'center', marginTop: 50 },
   emptyText: { fontSize: 18, fontWeight: 'bold' },
+
+  // Chat
+  chatInputBar: { flexDirection: 'row', alignItems: 'center', padding: 10, borderTopWidth: 1, borderTopColor: '#E5E7EB' },
+  chatInput: { flex: 1, backgroundColor: '#F9FAFB', borderRadius: 20, padding: 10, marginRight: 10 },
+  msgBubble: { padding: 10, borderRadius: 15, marginBottom: 10, maxWidth: '80%' },
+  msgMe: { backgroundColor: '#4F46E5', alignSelf: 'flex-end' },
+  msgOther: { backgroundColor: '#E5E7EB', alignSelf: 'flex-start' },
+  msgText: { fontSize: 16 },
 
   // Modals
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
