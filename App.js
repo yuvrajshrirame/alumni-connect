@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   StyleSheet, 
   Text, 
@@ -15,7 +15,8 @@ import {
   Image,
   Modal,
   Share,
-  Dimensions
+  Dimensions,
+  BackHandler // Import BackHandler
 } from 'react-native';
 import { MaterialIcons, Ionicons, FontAwesome5 } from '@expo/vector-icons';
 
@@ -42,7 +43,9 @@ import {
   doc, 
   limit,
   orderBy,
-  getDoc
+  getDoc,
+  increment,
+  arrayUnion
 } from 'firebase/firestore';
 
 // --- 2. FIREBASE CONFIGURATION ---
@@ -84,6 +87,32 @@ export default function App() {
   // Screen Modes
   const [isEditingProfile, setIsEditingProfile] = useState(false); 
 
+  // --- BACK HANDLER LOGIC ---
+  useEffect(() => {
+    const backAction = () => {
+      if (selectedAlum) {
+        setSelectedAlum(null);
+        return true;
+      }
+      if (isEditingProfile) {
+        setIsEditingProfile(false);
+        return true;
+      }
+      if (currentTab !== 'home') {
+        setCurrentTab('home');
+        return true;
+      }
+      return false; // Let default behavior happen (exit app)
+    };
+
+    const backHandler = BackHandler.addEventListener(
+      "hardwareBackPress",
+      backAction
+    );
+
+    return () => backHandler.remove();
+  }, [currentTab, selectedAlum, isEditingProfile]);
+
   // --- APP LAUNCH ---
   useEffect(() => {
     setTimeout(() => setIsSplashVisible(false), 2000);
@@ -91,24 +120,31 @@ export default function App() {
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
+        // Default values
         let role = currentUser.photoURL || 'Student'; 
         let company = 'N/A';
         let bio = '';
+        let batch = '';
+        let experience = 0;
         let stats = { rating: 5.0, sessions: 0, experience: 0 };
 
-        // Fetch extended profile from DB
-        if (role === 'Alumni') {
-           try {
-             const q = query(collection(db, "alumni"), where("uid", "==", currentUser.uid));
-             const snapshot = await getDocs(q);
-             if (!snapshot.empty) {
-               const docData = snapshot.docs[0].data();
-               company = docData.company || 'N/A';
-               bio = docData.bio || '';
-               if(docData.stats) stats = docData.stats;
-             }
-           } catch (e) { console.log("Profile fetch error", e); }
-        }
+        // Fetch extended profile from DB (User Collection)
+        try {
+            // Query 'users' or 'alumni' depending on structure. 
+            // Strategy: Check 'alumni' collection first if role is Alumni.
+            if (role === 'Alumni') {
+                const q = query(collection(db, "alumni"), where("uid", "==", currentUser.uid));
+                const snapshot = await getDocs(q);
+                if (!snapshot.empty) {
+                    const docData = snapshot.docs[0].data();
+                    company = docData.company || 'N/A';
+                    bio = docData.bio || '';
+                    batch = docData.batch || '';
+                    experience = docData.stats?.experience || 0;
+                    if(docData.stats) stats = docData.stats;
+                }
+            }
+        } catch (e) { console.log("Profile fetch error", e); }
 
         setUser({
           uid: currentUser.uid,
@@ -117,6 +153,8 @@ export default function App() {
           role: role,
           company: company,
           bio: bio,
+          batch: batch,
+          experience: experience,
           stats: stats
         });
 
@@ -193,7 +231,7 @@ export default function App() {
     } catch (error) { Alert.alert("Signup Failed", error.message); setIsLoading(false); }
   };
 
-  const handleOnboardingComplete = async (name, role, bio, company, experience) => {
+  const handleOnboardingComplete = async (name, role, bio, company, experience, batch) => {
     setIsLoading(true);
     try {
       const currentUser = auth.currentUser;
@@ -201,16 +239,22 @@ export default function App() {
       
       const stats = { rating: 5.0, sessions: 0, experience: experience || 0 };
 
+      // Always save to 'users' collection for general profile data
+      // In this simplified app, we use 'alumni' collection for alumni directory
+      
       if (role === 'Alumni') {
         await addDoc(collection(db, "alumni"), {
-          name, email: currentUser.email, role, bio, company: company || 'N/A',
-          uid: currentUser.uid, batch: new Date().getFullYear().toString(),
+          name, email: currentUser.email, role, bio, 
+          company: company || 'N/A',
+          batch: batch || new Date().getFullYear().toString(),
+          uid: currentUser.uid, 
           available: true, skills: ['Mentorship'], stats: stats
         });
       }
+      
       setUser({ 
         uid: currentUser.uid, email: currentUser.email, name, role, bio, 
-        company: company || 'N/A', stats: stats 
+        company: company || 'N/A', batch: batch, experience: experience, stats: stats 
       });
       setIsOnboarding(false);
     } catch (error) { Alert.alert("Error", error.message); }
@@ -230,7 +274,7 @@ export default function App() {
     ]);
   };
 
-  const handleUpdateProfile = async (newName, newEmail, newPassword) => {
+  const handleUpdateProfile = async (newName, newEmail, newPassword, newBio, newCompany) => {
     if(!auth.currentUser) return;
     setIsLoading(true);
     try {
@@ -238,7 +282,21 @@ export default function App() {
       if (newEmail && newEmail !== user.email) await updateEmail(auth.currentUser, newEmail);
       if (newPassword && newPassword.length > 0) await updatePassword(auth.currentUser, newPassword);
 
-      setUser({ ...user, name: newName, email: newEmail || user.email });
+      // Update Firestore if Alumni
+      if (user.role === 'Alumni') {
+          const q = query(collection(db, "alumni"), where("uid", "==", user.uid));
+          const snapshot = await getDocs(q);
+          if (!snapshot.empty) {
+              const docRef = snapshot.docs[0].ref;
+              await updateDoc(docRef, { 
+                  name: newName, 
+                  bio: newBio, 
+                  company: newCompany 
+              });
+          }
+      }
+
+      setUser({ ...user, name: newName, email: newEmail || user.email, bio: newBio, company: newCompany });
       setIsEditingProfile(false);
       Alert.alert("Success", "Profile updated.");
     } catch (error) {
@@ -253,11 +311,30 @@ export default function App() {
     try {
       await addDoc(collection(db, "posts"), {
         author: user.name, authorRole: user.role, authorCompany: user.company,
-        content: content, date: new Date().toLocaleDateString(), likes: 0
+        content: content, date: new Date().toLocaleDateString(), likes: 0, comments: []
       });
       fetchFeed(); // Refresh
       Alert.alert("Posted", "Shared to community.");
     } catch(e) { Alert.alert("Error", e.message); }
+  };
+
+  const handleLikePost = async (postId) => {
+      try {
+          const postRef = doc(db, "posts", postId);
+          await updateDoc(postRef, { likes: increment(1) });
+          // Optimistic update
+          setFeedPosts(prev => prev.map(p => p.id === postId ? {...p, likes: (p.likes || 0) + 1} : p));
+      } catch (e) { console.log("Like error", e); }
+  };
+
+  const handleCommentPost = async (postId, commentText) => {
+      try {
+          const postRef = doc(db, "posts", postId);
+          await updateDoc(postRef, { 
+              comments: arrayUnion({ user: user.name, text: commentText }) 
+          });
+          fetchFeed(); // Refresh to show comment
+      } catch (e) { Alert.alert("Error", "Could not comment."); }
   };
 
   // --- MENTOR ACTIONS ---
@@ -358,6 +435,8 @@ export default function App() {
                     user={user} 
                     onRefresh={fetchFeed}
                     onPost={handlePostSubmit}
+                    onLike={handleLikePost}
+                    onComment={handleCommentPost}
                   />
                 )}
                 {currentTab === 'mentors' && (
@@ -405,8 +484,10 @@ export default function App() {
 
 // --- SCREENS ---
 
-const FeedScreen = ({ posts, user, onRefresh, onPost }) => {
+const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
   const [text, setText] = useState('');
+  const [commentText, setCommentText] = useState('');
+  const [activePostId, setActivePostId] = useState(null); // To show comment input
   
   return (
     <View style={styles.screenContainer}>
@@ -452,16 +533,46 @@ const FeedScreen = ({ posts, user, onRefresh, onPost }) => {
                 <Text style={styles.postDate}>{post.date}</Text>
               </View>
               <Text style={styles.postContent}>{post.content}</Text>
+              
+              {/* Comments Display */}
+              {post.comments && post.comments.length > 0 && (
+                  <View style={styles.commentSection}>
+                      {post.comments.map((c, i) => (
+                          <Text key={i} style={styles.commentText}>
+                              <Text style={{fontWeight: 'bold'}}>{c.user}: </Text>{c.text}
+                          </Text>
+                      ))}
+                  </View>
+              )}
+
               <View style={styles.postActions}>
-                <TouchableOpacity style={styles.actionItem}>
+                <TouchableOpacity style={styles.actionItem} onPress={() => onLike(post.id)}>
                   <Ionicons name="heart-outline" size={20} color="#6B7280" />
-                  <Text style={styles.actionText}>Like</Text>
+                  <Text style={styles.actionText}>{post.likes || 0} Likes</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.actionItem}>
+                <TouchableOpacity style={styles.actionItem} onPress={() => setActivePostId(activePostId === post.id ? null : post.id)}>
                   <Ionicons name="chatbubble-outline" size={20} color="#6B7280" />
                   <Text style={styles.actionText}>Comment</Text>
                 </TouchableOpacity>
               </View>
+
+              {/* Comment Input */}
+              {activePostId === post.id && (
+                  <View style={{flexDirection: 'row', marginTop: 10}}>
+                      <TextInput 
+                          style={[styles.input, {flex: 1, marginBottom: 0}]} 
+                          placeholder="Write a comment..." 
+                          value={commentText}
+                          onChangeText={setCommentText}
+                      />
+                      <TouchableOpacity 
+                          style={{justifyContent: 'center', marginLeft: 10}}
+                          onPress={() => { onComment(post.id, commentText); setCommentText(''); setActivePostId(null); }}
+                      >
+                          <Text style={{color: '#4F46E5', fontWeight: 'bold'}}>Send</Text>
+                      </TouchableOpacity>
+                  </View>
+              )}
             </View>
           ))
         )}
@@ -583,13 +694,8 @@ const ProfileScreen = ({ user, onLogout, onEdit }) => {
 
       <View style={styles.menuContainer}>
         <TouchableOpacity style={styles.menuItem} onPress={onEdit}>
-          <Ionicons name="person-outline" size={22} color="#4B5563" />
-          <Text style={styles.menuText}>Personal Information</Text>
-          <Ionicons name="chevron-forward" size={20} color="#D1D5DB" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.menuItem} onPress={onEdit}>
-          <Ionicons name="shield-checkmark-outline" size={22} color="#4B5563" />
-          <Text style={styles.menuText}>Security & Password</Text>
+          <Ionicons name="settings-outline" size={22} color="#4B5563" />
+          <Text style={styles.menuText}>Settings & Profile</Text>
           <Ionicons name="chevron-forward" size={20} color="#D1D5DB" />
         </TouchableOpacity>
         <TouchableOpacity style={styles.menuItem} onPress={onLogout}>
@@ -605,6 +711,8 @@ const EditProfileScreen = ({ user, onCancel, onSave }) => {
   const [name, setName] = useState(user.name);
   const [email, setEmail] = useState(user.email);
   const [password, setPassword] = useState('');
+  const [bio, setBio] = useState(user.bio);
+  const [company, setCompany] = useState(user.company);
   
   return (
     <View style={styles.screenContainer}>
@@ -616,11 +724,24 @@ const EditProfileScreen = ({ user, onCancel, onSave }) => {
       <ScrollView>
         <Text style={styles.label}>Full Name</Text>
         <TextInput style={styles.input} value={name} onChangeText={setName} />
+        
+        <Text style={styles.label}>Bio</Text>
+        <TextInput style={styles.input} value={bio} onChangeText={setBio} multiline />
+
+        {user.role === 'Alumni' && (
+            <>
+                <Text style={styles.label}>Company</Text>
+                <TextInput style={styles.input} value={company} onChangeText={setCompany} />
+            </>
+        )}
+
         <Text style={styles.label}>Email</Text>
         <TextInput style={styles.input} value={email} onChangeText={setEmail} autoCapitalize="none" />
+        
         <Text style={styles.label}>New Password</Text>
         <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder="Leave empty to keep current" secureTextEntry />
-        <TouchableOpacity style={styles.primaryButton} onPress={() => onSave(name, email, password)}>
+        
+        <TouchableOpacity style={styles.primaryButton} onPress={() => onSave(name, email, password, bio, company)}>
           <Text style={styles.buttonText}>Save Changes</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -665,6 +786,7 @@ const OnboardingScreen = ({ onComplete }) => {
   const [bio, setBio] = useState('');
   const [company, setCompany] = useState('');
   const [exp, setExp] = useState('');
+  const [batch, setBatch] = useState('');
 
   return (
     <ScrollView contentContainerStyle={{flexGrow: 1, justifyContent: 'center', padding: 20}}>
@@ -691,10 +813,13 @@ const OnboardingScreen = ({ onComplete }) => {
           </>
         )}
 
+        <Text style={styles.label}>Batch Year</Text>
+        <TextInput style={styles.input} value={batch} onChangeText={setBatch} keyboardType="numeric" placeholder="e.g. 2023" />
+
         <Text style={styles.label}>Bio</Text>
-        <TextInput style={styles.input} value={bio} onChangeText={setBio} />
+        <TextInput style={styles.input} value={bio} onChangeText={setBio} multiline numberOfLines={3} />
         
-        <TouchableOpacity style={styles.primaryButton} onPress={() => onComplete(name, role, bio, company, exp)}>
+        <TouchableOpacity style={styles.primaryButton} onPress={() => onComplete(name, role, bio, company, exp, batch)}>
           <Text style={styles.buttonText}>Complete</Text>
         </TouchableOpacity>
       </View>
@@ -773,6 +898,8 @@ const styles = StyleSheet.create({
   postActions: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#F3F4F6', paddingTop: 10 },
   actionItem: { flex: 1, flexDirection: 'row', justifyContent: 'center', gap: 5 },
   actionText: { color: '#6B7280' },
+  commentSection: { backgroundColor: '#F9FAFB', padding: 10, borderRadius: 8, marginBottom: 10 },
+  commentText: { fontSize: 12, color: '#4B5563', marginBottom: 4 },
 
   // Directory & Search
   searchBox: { flexDirection: 'row', backgroundColor: '#F9FAFB', padding: 12, borderRadius: 12, marginBottom: 15 },
