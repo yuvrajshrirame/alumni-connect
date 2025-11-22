@@ -92,12 +92,18 @@ export default function App() {
   const [alumniList, setAlumniList] = useState([]); 
   const [feedPosts, setFeedPosts] = useState([]);
   
+  // Notifications
+  const [notifications, setNotifications] = useState([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+
   // Screen Modes
   const [isEditingProfile, setIsEditingProfile] = useState(false); 
 
   // --- BACK HANDLER LOGIC ---
   useEffect(() => {
     const backAction = () => {
+      if (showNotifications) { setShowNotifications(false); return true; }
       if (activeChatRequest) { setActiveChatRequest(null); return true; }
       if (selectedAlum) { setSelectedAlum(null); return true; }
       if (isEditingProfile) { setIsEditingProfile(false); return true; }
@@ -106,7 +112,7 @@ export default function App() {
     };
     const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
     return () => backHandler.remove();
-  }, [currentTab, selectedAlum, isEditingProfile, activeChatRequest]);
+  }, [currentTab, selectedAlum, isEditingProfile, activeChatRequest, showNotifications]);
 
   // --- APP LAUNCH & AUTH LISTENER ---
   useEffect(() => {
@@ -140,6 +146,7 @@ export default function App() {
   const fetchInitialData = (uid, role) => {
     fetchRequests(uid, role);
     fetchFeed();
+    fetchAlumni(); // Pre-load directory
   };
 
   // --- DATA FETCHING ---
@@ -169,9 +176,29 @@ export default function App() {
       
       const unsubscribe = onSnapshot(q, (querySnapshot) => {
         const reqs = [];
-        querySnapshot.forEach((doc) => reqs.push({ id: doc.id, ...doc.data() }));
+        let newNotifs = [];
+        let count = 0;
+
+        querySnapshot.forEach((doc) => {
+            const data = doc.data();
+            reqs.push({ id: doc.id, ...data });
+            
+            // Generate Notification Logic
+            if (role === 'Alumni' && data.status === 'Pending') {
+                count++;
+                newNotifs.push({ id: doc.id, title: 'New Request', body: `From ${data.senderName}`, type: 'request', data: data });
+            } else if (role === 'Student' && data.status === 'Accepted') {
+                // Check if accepted recently (simple logic for now)
+                count++;
+                newNotifs.push({ id: doc.id, title: 'Request Accepted', body: `${data.mentorName} accepted!`, type: 'chat', data: { id: doc.id, ...data } });
+            }
+        });
+
         if (role === 'Alumni') setIncomingRequests(reqs);
         else setMyRequests(reqs);
+        
+        setNotifications(newNotifs);
+        setUnreadCount(count);
       });
       return unsubscribe;
     } catch (e) { console.log(e); }
@@ -181,13 +208,13 @@ export default function App() {
     if (!db) return;
     try {
       const q = query(collection(db, "posts"), limit(50));
-      const querySnapshot = await getDocs(q);
-      const posts = [];
-      querySnapshot.forEach((doc) => posts.push({ id: doc.id, ...doc.data() }));
-      
-      // FIX: Sort by LIKES descending
-      posts.sort((a, b) => (b.likes || 0) - (a.likes || 0));
-      setFeedPosts(posts);
+      const unsubscribe = onSnapshot(q, (querySnapshot) => {
+        const posts = [];
+        querySnapshot.forEach((doc) => posts.push({ id: doc.id, ...doc.data() }));
+        posts.sort((a, b) => (b.likes || 0) - (a.likes || 0)); // Sort by popularity
+        setFeedPosts(posts);
+      });
+      return unsubscribe;
     } catch (e) { console.log("Feed error", e); }
   };
 
@@ -246,9 +273,6 @@ export default function App() {
           setIsOnboarding(false);
           setUser(null);
           setCurrentTab('home');
-          setMyRequests([]);
-          setIncomingRequests([]);
-          setAlumniList([]);
       }}
     ]);
   };
@@ -276,7 +300,6 @@ export default function App() {
     setIsLoading(false);
   };
 
-  // --- FEED ACTIONS ---
   const handlePostSubmit = async (content) => {
     if (!content.trim()) return;
     try {
@@ -285,7 +308,6 @@ export default function App() {
         content: content, date: new Date().toLocaleDateString(), 
         createdAt: serverTimestamp(), likedBy: [], comments: []
       });
-      fetchFeed(); 
       Alert.alert("Posted", "Shared to community.");
     } catch(e) { Alert.alert("Error", e.message); }
   };
@@ -299,7 +321,6 @@ export default function App() {
           } else {
              await updateDoc(postRef, { likedBy: arrayUnion(user.uid) });
           }
-          fetchFeed();
       } catch (e) { console.log("Like error", e); }
   };
 
@@ -312,7 +333,7 @@ export default function App() {
           let updatedComments = postData.comments || [];
 
           const newComment = {
-              id: Date.now().toString(),
+              id: Date.now().toString() + Math.random().toString(36).substr(2, 9), // Unique ID
               user: user.name,
               text: commentText,
               role: user.role,
@@ -331,11 +352,9 @@ export default function App() {
           }
 
           await updateDoc(postRef, { comments: updatedComments });
-          fetchFeed(); 
       } catch (e) { Alert.alert("Error", "Could not comment."); }
   };
 
-  // --- MENTOR ACTIONS ---
   const sendRequest = async (alum, message) => {
     if (!user || !db) return;
     try {
@@ -382,6 +401,14 @@ export default function App() {
     } catch (e) { Alert.alert("Error", "Could not update."); }
   };
 
+  const handleNotificationClick = (notif) => {
+      setShowNotifications(false);
+      if (notif.type === 'request') setCurrentTab('requests');
+      if (notif.type === 'chat') {
+          setActiveChatRequest(notif.data);
+      }
+  };
+
   // --- UI RENDERERS ---
   if (isSplashVisible) return <SplashScreen />;
 
@@ -424,9 +451,17 @@ export default function App() {
                  currentTab === 'mentors' ? 'Directory' : 
                  currentTab === 'requests' ? 'Inbox' : 'Profile'}
               </Text>
-              <TouchableOpacity onPress={() => setCurrentTab('profile')}>
-                <Avatar size={36} />
-              </TouchableOpacity>
+              <View style={{flexDirection: 'row', gap: 15}}>
+                <TouchableOpacity onPress={() => setShowNotifications(true)}>
+                  <View>
+                    <Ionicons name="notifications-outline" size={26} color="#1F2937" />
+                    {unreadCount > 0 && <View style={styles.notifBadge} />}
+                  </View>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setCurrentTab('profile')}>
+                  <Avatar size={36} />
+                </TouchableOpacity>
+              </View>
             </View>
           )}
 
@@ -457,7 +492,6 @@ export default function App() {
                   <FeedScreen 
                     posts={feedPosts} 
                     user={user} 
-                    onRefresh={fetchFeed}
                     onPost={handlePostSubmit}
                     onLike={handleLikePost}
                     onComment={handleCommentPost}
@@ -500,6 +534,31 @@ export default function App() {
             </View>
           )}
 
+          <Modal visible={showNotifications} transparent animationType="fade">
+            <View style={styles.modalOverlay}>
+                <View style={styles.modalContent}>
+                    <View style={{flexDirection:'row', justifyContent:'space-between', marginBottom:15}}>
+                        <Text style={styles.modalTitle}>Notifications</Text>
+                        <TouchableOpacity onPress={() => setShowNotifications(false)}>
+                            <Ionicons name="close" size={24} />
+                        </TouchableOpacity>
+                    </View>
+                    <ScrollView>
+                        {notifications.length === 0 ? <Text style={{textAlign:'center', color:'#666'}}>No new notifications.</Text> : 
+                        notifications.map((n, i) => (
+                            <TouchableOpacity key={i} style={styles.notifItem} onPress={() => handleNotificationClick(n)}>
+                                <View style={{width: 8, height: 8, borderRadius: 4, backgroundColor: '#4F46E5', marginRight: 10, marginTop: 6}} />
+                                <View>
+                                    <Text style={{fontWeight:'bold'}}>{n.title}</Text>
+                                    <Text style={{color:'#666'}}>{n.body}</Text>
+                                </View>
+                            </TouchableOpacity>
+                        ))}
+                    </ScrollView>
+                </View>
+            </View>
+          </Modal>
+
         </View>
       </View>
     </SafeAreaView>
@@ -540,13 +599,12 @@ const ChatScreen = ({ request, currentUser, onBack }) => {
     return (
         <KeyboardAvoidingView 
             style={{flex:1}} 
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
             keyboardVerticalOffset={Platform.OS === 'ios' ? 60 : 0}
         >
             <View style={styles.screenContainer}>
                 <View style={styles.headerRow}>
                     <TouchableOpacity onPress={onBack}><Ionicons name="arrow-back" size={24} /></TouchableOpacity>
-                    {/* FIX: Show Other Person's Name */}
                     <Text style={styles.headerTitle}>{otherPersonName}</Text>
                     <View style={{width: 24}} />
                 </View>
@@ -558,11 +616,7 @@ const ChatScreen = ({ request, currentUser, onBack }) => {
                     renderItem={({item}) => {
                         const isMe = item.senderId === currentUser.uid;
                         return (
-                            <View style={[
-                                styles.msgBubble, 
-                                // FIX: Distinct styles
-                                isMe ? styles.msgMe : styles.msgOther
-                            ]}>
+                            <View style={[styles.msgBubble, isMe ? styles.msgMe : styles.msgOther]}>
                                 <Text style={[styles.msgText, isMe && {color:'#fff'}]}>{item.text}</Text>
                             </View>
                         );
@@ -585,7 +639,7 @@ const ChatScreen = ({ request, currentUser, onBack }) => {
     );
 };
 
-const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
+const FeedScreen = ({ posts, user, onPost, onLike, onComment }) => {
   const [text, setText] = useState('');
   const [commentText, setCommentText] = useState('');
   const [activePostId, setActivePostId] = useState(null); 
@@ -598,16 +652,20 @@ const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
         keyboardVerticalOffset={Platform.OS === "ios" ? 100 : 0}
     >
         <View style={styles.screenContainer}>
+        {/* POST INPUT - WITH PENCIL ICON */}
         <View style={styles.postComposer}>
             <View style={{flexDirection:'row', alignItems:'center'}}>
             <Avatar size={40} />
-            <TextInput 
-                style={styles.composeInput} 
-                placeholder="Share a job, tip, or update..." 
-                value={text}
-                onChangeText={setText}
-                multiline
-            />
+            <View style={styles.inputWrapper}>
+                <Ionicons name="pencil" size={16} color="#9CA3AF" style={{marginRight: 5}} />
+                <TextInput 
+                    style={styles.composeInput} 
+                    placeholder="Share a job, tip, or update..." 
+                    value={text}
+                    onChangeText={setText}
+                    multiline
+                />
+            </View>
             </View>
             {text.length > 0 && (
             <TouchableOpacity style={styles.postBtn} onPress={() => { onPost(text); setText(''); }}>
@@ -622,10 +680,10 @@ const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
                 <Text style={styles.emptyText}>No posts yet.</Text>
             </View>
             )}
-            {posts.map((post, index) => {
+            {posts.map((post) => {
                 const isLiked = post.likedBy && post.likedBy.includes(user.uid);
                 return (
-                <View key={index} style={styles.postCard}>
+                <View key={post.id} style={styles.postCard}>
                 <View style={styles.postHeader}>
                     <Avatar size={40} />
                     <View style={{marginLeft: 10}}>
@@ -649,7 +707,7 @@ const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
                                         {c.text}
                                     </Text>
                                 </TouchableOpacity>
-                                {/* Replies - Indented and Styled */}
+                                {/* Replies */}
                                 {c.replies && c.replies.map(r => (
                                     <View key={r.id} style={styles.replyContainer}>
                                         <Text style={styles.replyText}>
@@ -711,7 +769,6 @@ const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
 
 const MentorsScreen = ({ alumni, onSelect, onRefresh }) => {
   const [search, setSearch] = useState('');
-  
   const filtered = alumni.filter(a => {
     const s = search.toLowerCase();
     return (a.name||'').toLowerCase().includes(s) || (a.company||'').toLowerCase().includes(s);
@@ -752,7 +809,7 @@ const DetailScreen = ({ alum, currentUserUid, onBack, onConnect, onRate }) => {
 
   return (
     <KeyboardAvoidingView 
-        behavior={Platform.OS === "ios" ? "padding" : "height"} 
+        behavior={Platform.OS === "ios" ? "padding" : undefined} 
         style={{flex:1}}
     >
         <View style={styles.screenContainer}>
@@ -867,7 +924,7 @@ const EditProfileScreen = ({ user, onCancel, onSave }) => {
   
   return (
     <KeyboardAvoidingView 
-        behavior={Platform.OS === "ios" ? "padding" : "height"} 
+        behavior={Platform.OS === "ios" ? "padding" : undefined} 
         style={{flex:1}}
     >
         <View style={styles.screenContainer}>
@@ -909,8 +966,8 @@ const RequestsScreen = ({ requests, isAlumni, onAction, onChat, onRefresh }) => 
       {requests.length === 0 ? (
         <View style={styles.emptyState}><Text style={styles.emptyText}>No requests yet.</Text></View>
       ) : (
-        requests.map((req, idx) => (
-          <View key={idx} style={styles.reqCard}>
+        requests.map((req) => (
+          <View key={req.id} style={styles.reqCard}>
             <View style={[styles.reqStrip, {backgroundColor: req.status === 'Accepted' ? '#10B981' : '#F59E0B'}]} />
             <View style={{padding: 15}}>
               <Text style={styles.reqHeader}>{isAlumni ? req.senderName : `To: ${req.mentorName}`}</Text>
@@ -955,7 +1012,7 @@ const OnboardingScreen = ({ onComplete }) => {
 
   return (
     <KeyboardAvoidingView 
-        behavior={Platform.OS === "ios" ? "padding" : "height"} 
+        behavior={Platform.OS === "ios" ? "padding" : undefined} 
         style={{flex:1}}
     >
         <ScrollView contentContainerStyle={{flexGrow: 1, justifyContent: 'center', padding: 20}}>
@@ -1045,10 +1102,12 @@ const styles = StyleSheet.create({
   
   headerBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
   headerTitle: { fontSize: 24, fontWeight: '800', color: '#111' },
-  
+  notifBadge: { position: 'absolute', right: 0, top: 0, width: 10, height: 10, borderRadius: 5, backgroundColor: '#EF4444', borderWidth: 1, borderColor: '#fff' },
+
   // Feed
   postComposer: { backgroundColor: '#fff', padding: 15, borderRadius: 15, marginBottom: 20, borderWidth: 1, borderColor: '#E5E7EB', shadowColor:'#000', shadowOpacity:0.05, elevation:2 },
-  composeInput: { flex: 1, marginLeft: 10, fontSize: 16, maxHeight: 100 },
+  inputWrapper: { flex: 1, flexDirection: 'row', alignItems: 'center', marginLeft: 10 },
+  composeInput: { flex: 1, fontSize: 16, maxHeight: 100 },
   postBtn: { alignSelf: 'flex-end', backgroundColor: '#4F46E5', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, marginTop: 10 },
   postBtnText: { color: '#fff', fontWeight: 'bold' },
   feedHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
@@ -1135,17 +1194,15 @@ const styles = StyleSheet.create({
   chatInputBar: { flexDirection: 'row', alignItems: 'center', padding: 10, borderTopWidth: 1, borderTopColor: '#E5E7EB' },
   chatInput: { flex: 1, backgroundColor: '#F9FAFB', borderRadius: 20, padding: 10, marginRight: 10 },
   msgBubble: { padding: 10, borderRadius: 15, marginBottom: 10, maxWidth: '80%' },
-  
-  // FIX: Distinct Chat Colors and Alignment
-  msgMe: { backgroundColor: '#4F46E5', alignSelf: 'flex-end' }, // Blue, Right
-  msgOther: { backgroundColor: '#E5E7EB', alignSelf: 'flex-start' }, // Gray, Left
-  
+  msgMe: { backgroundColor: '#4F46E5', alignSelf: 'flex-end' },
+  msgOther: { backgroundColor: '#E5E7EB', alignSelf: 'flex-start' },
   msgText: { fontSize: 16 },
 
   // Modals
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { backgroundColor: '#fff', padding: 20, borderRadius: 15, width: '80%' },
+  modalContent: { backgroundColor: '#fff', padding: 20, borderRadius: 15, width: '80%', maxHeight: '80%' },
   modalTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' },
+  notifItem: { flexDirection: 'row', padding: 15, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', alignItems: 'center' },
 
   // Common
   headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
