@@ -15,7 +15,8 @@ import {
   Image,
   Modal,
   Share,
-  BackHandler 
+  BackHandler,
+  Linking 
 } from 'react-native';
 import { MaterialIcons, Ionicons, FontAwesome5 } from '@expo/vector-icons';
 
@@ -43,6 +44,7 @@ import {
   limit,
   orderBy,
   getDoc,
+  setDoc,
   increment,
   arrayUnion,
   arrayRemove
@@ -90,68 +92,47 @@ export default function App() {
   // --- BACK HANDLER LOGIC ---
   useEffect(() => {
     const backAction = () => {
-      if (selectedAlum) {
-        setSelectedAlum(null);
-        return true;
-      }
-      if (isEditingProfile) {
-        setIsEditingProfile(false);
-        return true;
-      }
-      if (currentTab !== 'home') {
-        setCurrentTab('home');
-        return true;
-      }
+      if (selectedAlum) { setSelectedAlum(null); return true; }
+      if (isEditingProfile) { setIsEditingProfile(false); return true; }
+      if (currentTab !== 'home') { setCurrentTab('home'); return true; }
       return false; 
     };
-
     const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
     return () => backHandler.remove();
   }, [currentTab, selectedAlum, isEditingProfile]);
 
-  // --- APP LAUNCH ---
+  // --- APP LAUNCH & AUTH LISTENER ---
   useEffect(() => {
     setTimeout(() => setIsSplashVisible(false), 2000);
     if (!auth) return;
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
-        let role = currentUser.photoURL || 'Student'; 
-        let company = 'N/A';
-        let bio = '';
-        let batch = '';
-        let experience = 0;
-        let stats = { rating: 5.0, ratingCount: 1, sessions: 0, experience: 0 };
-
-        // Fetch extended profile from DB
+        setIsLoading(true);
+        // CRITICAL FIX: Check if user has a profile in DB. If not, force Onboarding.
         try {
-            if (role === 'Alumni') {
-                const q = query(collection(db, "alumni"), where("uid", "==", currentUser.uid));
-                const snapshot = await getDocs(q);
-                if (!snapshot.empty) {
-                    const docData = snapshot.docs[0].data();
-                    company = docData.company || 'N/A';
-                    bio = docData.bio || '';
-                    batch = docData.batch || '';
-                    if(docData.stats) stats = docData.stats;
-                }
+            const userDocRef = doc(db, "users", currentUser.uid);
+            const userDocSnap = await getDoc(userDocRef);
+
+            if (userDocSnap.exists()) {
+                // User exists, load data
+                const data = userDocSnap.data();
+                setUser({ ...data, uid: currentUser.uid }); // Ensure UID is set
+                fetchInitialData(currentUser.uid, data.role);
+                setIsOnboarding(false);
+            } else {
+                // User logged in but no DB record? Force Onboarding.
+                setIsOnboarding(true);
+                // Set temporary user object so we pass the "if (!user)" check in render
+                setUser({ uid: currentUser.uid, email: currentUser.email, name: currentUser.displayName });
             }
-        } catch (e) { console.log("Profile fetch error", e); }
-
-        setUser({
-          uid: currentUser.uid,
-          email: currentUser.email,
-          name: currentUser.displayName || currentUser.email.split('@')[0],
-          role: role,
-          company: company,
-          bio: bio,
-          batch: batch,
-          stats: stats
-        });
-
-        fetchInitialData(currentUser.uid, role);
+        } catch (e) {
+            console.log("Auth check error", e);
+        }
+        setIsLoading(false);
       } else {
         setUser(null);
+        setIsOnboarding(false);
       }
     });
     return () => unsubscribe();
@@ -171,11 +152,10 @@ export default function App() {
       const list = [];
       querySnapshot.forEach((doc) => {
         const data = doc.data();
-        // STRICT FILTER: Remove invalid data, self, and non-alumni
+        // STRICT FILTER
         if (!data.name || !data.uid) return; 
         if (user && data.uid === user.uid) return;
         if (data.role !== 'Alumni') return;
-        
         list.push({ id: doc.id, ...data });
       });
       setAlumniList(list);
@@ -219,8 +199,7 @@ export default function App() {
     setIsLoading(true);
     try { 
       await createUserWithEmailAndPassword(auth, email, password);
-      setIsOnboarding(true); 
-      setIsLoading(false);
+      // Auth listener will catch the missing DB profile and trigger Onboarding
     } catch (error) { Alert.alert("Signup Failed", error.message); setIsLoading(false); }
   };
 
@@ -230,23 +209,28 @@ export default function App() {
       const currentUser = auth.currentUser;
       await updateProfile(currentUser, { displayName: name, photoURL: role });
       
-      const stats = { rating: 5.0, ratingCount: 1, sessions: 0, experience: experience || 0 };
+      const userData = {
+        name, email: currentUser.email, role, bio, 
+        company: company || 'N/A',
+        batch: batch || new Date().getFullYear().toString(),
+        uid: currentUser.uid,
+        experience: experience || 0,
+        stats: { rating: 5.0, ratingCount: 1, sessions: 0, experience: experience || 0 }
+      };
 
+      // 1. Save to Master 'users' collection (for everyone)
+      await setDoc(doc(db, "users", currentUser.uid), userData);
+
+      // 2. If Alumni, ALSO save to 'alumni' collection (for directory)
       if (role === 'Alumni') {
-        await addDoc(collection(db, "alumni"), {
-          name, email: currentUser.email, role, bio, 
-          company: company || 'N/A',
-          batch: batch || new Date().getFullYear().toString(),
-          uid: currentUser.uid, 
-          available: true, skills: ['Mentorship'], stats: stats
+        await setDoc(doc(db, "alumni", currentUser.uid), {
+            ...userData,
+            available: true, 
+            skills: ['Mentorship']
         });
       }
       
-      setUser({ 
-        uid: currentUser.uid, email: currentUser.email, name, role, bio, 
-        company: company || 'N/A', batch: batch, stats: stats 
-      });
-      
+      setUser(userData);
       setIsOnboarding(false);
     } catch (error) { Alert.alert("Error", error.message); }
     setIsLoading(false);
@@ -258,6 +242,7 @@ export default function App() {
       { text: "Log Out", style: "destructive", onPress: async () => {
           await signOut(auth);
           setIsOnboarding(false);
+          setUser(null);
           setCurrentTab('home');
           setMyRequests([]);
           setIncomingRequests([]);
@@ -274,13 +259,14 @@ export default function App() {
       if (newEmail && newEmail !== user.email) await updateEmail(auth.currentUser, newEmail);
       if (newPassword && newPassword.length > 0) await updatePassword(auth.currentUser, newPassword);
 
+      // Update in Firestore 'users'
+      const userRef = doc(db, "users", user.uid);
+      await updateDoc(userRef, { name: newName, bio: newBio, company: newCompany });
+
+      // Update in 'alumni' if applicable
       if (user.role === 'Alumni') {
-          const q = query(collection(db, "alumni"), where("uid", "==", user.uid));
-          const snapshot = await getDocs(q);
-          if (!snapshot.empty) {
-              const docRef = snapshot.docs[0].ref;
-              await updateDoc(docRef, { name: newName, bio: newBio, company: newCompany });
-          }
+          const alumRef = doc(db, "alumni", user.uid);
+          await updateDoc(alumRef, { name: newName, bio: newBio, company: newCompany });
       }
 
       setUser({ ...user, name: newName, email: newEmail || user.email, bio: newBio, company: newCompany });
@@ -309,7 +295,6 @@ export default function App() {
       try {
           const postRef = doc(db, "posts", post.id);
           const isLiked = post.likedBy && post.likedBy.includes(user.uid);
-          
           if (isLiked) {
              await updateDoc(postRef, { likedBy: arrayRemove(user.uid) });
           } else {
@@ -339,7 +324,7 @@ export default function App() {
         mentorId: alum.uid, mentorName: alum.name,
         status: 'Pending', date: new Date().toLocaleDateString(),
         message: message, mode: mode, 
-        mentorEmail: alum.email
+        mentorEmail: alum.email // Save email for contact later
       });
       Alert.alert("Request Sent", "Track status in Requests tab.");
       setSelectedAlum(null); 
@@ -352,8 +337,6 @@ export default function App() {
     try {
         const alumRef = doc(db, "alumni", alum.id);
         const currentStats = alum.stats || { rating: 5.0, ratingCount: 1, experience: 0, sessions: 0 };
-        
-        // Calculate new weighted average
         const newCount = (currentStats.ratingCount || 1) + 1;
         const currentTotal = (currentStats.rating || 5.0) * (currentStats.ratingCount || 1);
         const newRating = ((currentTotal + rating) / newCount).toFixed(1);
@@ -362,34 +345,38 @@ export default function App() {
             "stats.rating": parseFloat(newRating),
             "stats.ratingCount": newCount
         });
-        
         Alert.alert("Success", `You rated ${alum.name} ${rating} stars.`);
-        // Update local view
         setSelectedAlum({ ...alum, stats: { ...currentStats, rating: parseFloat(newRating), ratingCount: newCount } });
-    } catch (e) {
-        Alert.alert("Error", "Could not submit rating.");
-    }
+    } catch (e) { Alert.alert("Error", "Could not submit rating."); }
   };
 
   const handleRequestAction = async (reqId, newStatus) => {
     try {
       const reqRef = doc(db, "requests", reqId);
       await updateDoc(reqRef, { status: newStatus });
-      const updated = incomingRequests.map(r => r.id === reqId ? {...r, status: newStatus} : r);
-      setIncomingRequests(updated);
+      // Refresh lists
+      fetchRequests(user.uid, user.role);
     } catch (e) { Alert.alert("Error", "Could not update."); }
   };
 
   // --- UI RENDERERS ---
   if (isSplashVisible) return <SplashScreen />;
 
+  // FORCE ONBOARDING IF LOGGED IN BUT NO PROFILE
+  if (isOnboarding && user) {
+      return (
+        <View style={styles.webBackground}>
+            <View style={styles.webContainer}>
+                <OnboardingScreen onComplete={handleOnboardingComplete} />
+            </View>
+        </View>
+      );
+  }
+
   if (!user) {
     return (
       <View style={styles.webBackground}>
         <View style={styles.webContainer}>
-          {isOnboarding ? (
-             <OnboardingScreen onComplete={handleOnboardingComplete} />
-          ) : (
              <AuthScreen 
                isLogin={isLoginView} 
                onToggle={() => setIsLoginView(!isLoginView)} 
@@ -397,7 +384,6 @@ export default function App() {
                onSignup={handleSignup}
                loading={isLoading}
              />
-          )}
         </View>
       </View>
     );
@@ -671,7 +657,6 @@ const DetailScreen = ({ alum, currentUserUid, onBack, onConnect, onRate }) => {
         )}
       </ScrollView>
 
-      {/* Rating Modal */}
       <Modal visible={showRating} transparent animationType="fade">
           <View style={styles.modalOverlay}>
               <View style={styles.modalContent}>
@@ -703,7 +688,6 @@ const ProfileScreen = ({ user, onLogout, onEdit }) => {
         <Text style={styles.profileName}>{user.name}</Text>
         <Text style={styles.profileRole}>{user.role} {user.company !== 'N/A' && `• ${user.company}`}</Text>
         
-        {/* BADGES */}
         <View style={styles.badgeContainer}>
             {user.role === 'Alumni' ? (
                 <View style={[styles.badgePill, {backgroundColor: '#DBEAFE'}]}>
@@ -756,23 +740,18 @@ const EditProfileScreen = ({ user, onCancel, onSave }) => {
       <ScrollView>
         <Text style={styles.label}>Full Name</Text>
         <TextInput style={styles.input} value={name} onChangeText={setName} />
-        
         <Text style={styles.label}>Bio</Text>
         <TextInput style={styles.input} value={bio} onChangeText={setBio} multiline />
-
         {user.role === 'Alumni' && (
             <>
                 <Text style={styles.label}>Company</Text>
                 <TextInput style={styles.input} value={company} onChangeText={setCompany} />
             </>
         )}
-
         <Text style={styles.label}>Email</Text>
         <TextInput style={styles.input} value={email} onChangeText={setEmail} autoCapitalize="none" />
-        
         <Text style={styles.label}>New Password</Text>
         <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder="Leave empty to keep current" secureTextEntry />
-        
         <TouchableOpacity style={styles.primaryButton} onPress={() => onSave(name, email, password, bio, company)}>
           <Text style={styles.buttonText}>Save Changes</Text>
         </TouchableOpacity>
@@ -797,13 +776,32 @@ const RequestsScreen = ({ requests, isAlumni, onAction, onRefresh }) => (
               <Text style={styles.reqHeader}>{isAlumni ? req.senderName : `To: ${req.mentorName}`}</Text>
               <Text style={styles.reqDate}>{req.date} • {req.mode}</Text>
               <Text style={styles.reqMsg}>{req.message}</Text>
+              
+              {/* ACCEPTED VIEW */}
+              {req.status === 'Accepted' && !isAlumni && (
+                  <View style={{marginTop: 10, backgroundColor: '#ECFDF5', padding: 10, borderRadius: 8}}>
+                      <Text style={{color: '#065F46', fontWeight: 'bold', marginBottom: 5}}>Request Accepted! 🎉</Text>
+                      <Text style={{fontSize: 12, color: '#065F46'}}>Please contact your mentor at:</Text>
+                      <Text style={{fontSize: 14, fontWeight: 'bold', color: '#065F46', marginVertical: 5}}>{req.mentorEmail || 'Email not provided'}</Text>
+                      <TouchableOpacity 
+                        style={{backgroundColor: '#059669', padding: 8, borderRadius: 5, alignItems: 'center'}}
+                        onPress={() => req.mentorEmail && Linking.openURL(`mailto:${req.mentorEmail}`)}
+                      >
+                          <Text style={{color: '#fff', fontWeight: 'bold'}}>Open Email</Text>
+                      </TouchableOpacity>
+                  </View>
+              )}
+
               {isAlumni && req.status === 'Pending' && (
                 <View style={styles.reqActions}>
                   <TouchableOpacity style={[styles.actionBtn, {backgroundColor:'#EF4444'}]} onPress={() => onAction(req.id, 'Rejected')}><Text style={{color:'#fff'}}>Reject</Text></TouchableOpacity>
                   <TouchableOpacity style={[styles.actionBtn, {backgroundColor:'#10B981'}]} onPress={() => onAction(req.id, 'Accepted')}><Text style={{color:'#fff'}}>Accept</Text></TouchableOpacity>
                 </View>
               )}
-              {req.status !== 'Pending' && <Text style={{marginTop:5, fontWeight:'bold', color: req.status === 'Accepted' ? '#10B981' : '#EF4444'}}>{req.status.toUpperCase()}</Text>}
+              
+              {req.status !== 'Pending' && req.status !== 'Accepted' && (
+                  <Text style={{marginTop:5, fontWeight:'bold', color: '#EF4444'}}>{req.status.toUpperCase()}</Text>
+              )}
             </View>
           </View>
         ))
@@ -826,7 +824,6 @@ const OnboardingScreen = ({ onComplete }) => {
         <Text style={styles.authTitle}>Profile Setup</Text>
         <Text style={styles.label}>Full Name</Text>
         <TextInput style={styles.input} value={name} onChangeText={setName} />
-        
         <View style={{flexDirection:'row', gap:10, marginBottom:15}}>
           {['Student', 'Alumni'].map(r => (
             <TouchableOpacity key={r} style={[styles.roleBtn, role === r && styles.roleBtnActive]} onPress={() => setRole(r)}>
@@ -834,23 +831,18 @@ const OnboardingScreen = ({ onComplete }) => {
             </TouchableOpacity>
           ))}
         </View>
-
         <Text style={styles.label}>{role === 'Student' ? 'University' : 'Current Company'}</Text>
         <TextInput style={styles.input} value={company} onChangeText={setCompany} />
-        
         {role === 'Alumni' && (
           <>
             <Text style={styles.label}>Years of Experience</Text>
             <TextInput style={styles.input} value={exp} onChangeText={setExp} keyboardType="numeric" />
           </>
         )}
-
         <Text style={styles.label}>Batch Year</Text>
         <TextInput style={styles.input} value={batch} onChangeText={setBatch} keyboardType="numeric" placeholder="e.g. 2023" />
-
         <Text style={styles.label}>Bio</Text>
         <TextInput style={styles.input} value={bio} onChangeText={setBio} multiline numberOfLines={3} />
-        
         <TouchableOpacity style={styles.primaryButton} onPress={() => onComplete(name, role, bio, company, exp, batch)}>
           <Text style={styles.buttonText}>Complete</Text>
         </TouchableOpacity>
