@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   StyleSheet, 
   Text, 
@@ -16,7 +16,7 @@ import {
   Modal,
   Share,
   Dimensions,
-  BackHandler // Import BackHandler
+  BackHandler 
 } from 'react-native';
 import { MaterialIcons, Ionicons, FontAwesome5 } from '@expo/vector-icons';
 
@@ -102,7 +102,8 @@ export default function App() {
         setCurrentTab('home');
         return true;
       }
-      return false; // Let default behavior happen (exit app)
+      // Default behavior (Exit App)
+      return false; 
     };
 
     const backHandler = BackHandler.addEventListener(
@@ -120,7 +121,6 @@ export default function App() {
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
-        // Default values
         let role = currentUser.photoURL || 'Student'; 
         let company = 'N/A';
         let bio = '';
@@ -128,10 +128,9 @@ export default function App() {
         let experience = 0;
         let stats = { rating: 5.0, sessions: 0, experience: 0 };
 
-        // Fetch extended profile from DB (User Collection)
+        // Fetch extended profile from DB
         try {
-            // Query 'users' or 'alumni' depending on structure. 
-            // Strategy: Check 'alumni' collection first if role is Alumni.
+            // Query 'alumni' collection first if role is Alumni
             if (role === 'Alumni') {
                 const q = query(collection(db, "alumni"), where("uid", "==", currentUser.uid));
                 const snapshot = await getDocs(q);
@@ -206,12 +205,11 @@ export default function App() {
   const fetchFeed = async () => {
     if (!db) return;
     try {
-      // Simple fetch, in real app use orderBy('date', 'desc')
       const q = query(collection(db, "posts"), limit(20));
       const querySnapshot = await getDocs(q);
       const posts = [];
       querySnapshot.forEach((doc) => posts.push({ id: doc.id, ...doc.data() }));
-      setFeedPosts(posts.reverse()); // Show newest first (simple reversal)
+      setFeedPosts(posts.reverse());
     } catch (e) { console.log("Feed error", e); }
   };
 
@@ -226,6 +224,7 @@ export default function App() {
     setIsLoading(true);
     try { 
       await createUserWithEmailAndPassword(auth, email, password);
+      // Trigger Onboarding Flow
       setIsOnboarding(true); 
       setIsLoading(false);
     } catch (error) { Alert.alert("Signup Failed", error.message); setIsLoading(false); }
@@ -235,13 +234,12 @@ export default function App() {
     setIsLoading(true);
     try {
       const currentUser = auth.currentUser;
+      // 1. Update Core Auth Profile
       await updateProfile(currentUser, { displayName: name, photoURL: role });
       
       const stats = { rating: 5.0, sessions: 0, experience: experience || 0 };
 
-      // Always save to 'users' collection for general profile data
-      // In this simplified app, we use 'alumni' collection for alumni directory
-      
+      // 2. Save to Alumni Database (This ensures they appear in Directory)
       if (role === 'Alumni') {
         await addDoc(collection(db, "alumni"), {
           name, email: currentUser.email, role, bio, 
@@ -252,10 +250,12 @@ export default function App() {
         });
       }
       
+      // 3. Update Local State
       setUser({ 
         uid: currentUser.uid, email: currentUser.email, name, role, bio, 
         company: company || 'N/A', batch: batch, experience: experience, stats: stats 
       });
+      
       setIsOnboarding(false);
     } catch (error) { Alert.alert("Error", error.message); }
     setIsLoading(false);
@@ -266,6 +266,8 @@ export default function App() {
       { text: "Cancel", style: "cancel" },
       { text: "Log Out", style: "destructive", onPress: async () => {
           await signOut(auth);
+          // CRITICAL FIX: Reset all states including onboarding
+          setIsOnboarding(false);
           setCurrentTab('home');
           setMyRequests([]);
           setIncomingRequests([]);
@@ -305,7 +307,6 @@ export default function App() {
     setIsLoading(false);
   };
 
-  // --- FEED ACTIONS ---
   const handlePostSubmit = async (content) => {
     if (!content.trim()) return;
     try {
@@ -313,7 +314,7 @@ export default function App() {
         author: user.name, authorRole: user.role, authorCompany: user.company,
         content: content, date: new Date().toLocaleDateString(), likes: 0, comments: []
       });
-      fetchFeed(); // Refresh
+      fetchFeed(); 
       Alert.alert("Posted", "Shared to community.");
     } catch(e) { Alert.alert("Error", e.message); }
   };
@@ -322,7 +323,6 @@ export default function App() {
       try {
           const postRef = doc(db, "posts", postId);
           await updateDoc(postRef, { likes: increment(1) });
-          // Optimistic update
           setFeedPosts(prev => prev.map(p => p.id === postId ? {...p, likes: (p.likes || 0) + 1} : p));
       } catch (e) { console.log("Like error", e); }
   };
@@ -333,11 +333,10 @@ export default function App() {
           await updateDoc(postRef, { 
               comments: arrayUnion({ user: user.name, text: commentText }) 
           });
-          fetchFeed(); // Refresh to show comment
+          fetchFeed(); 
       } catch (e) { Alert.alert("Error", "Could not comment."); }
   };
 
-  // --- MENTOR ACTIONS ---
   const sendRequest = async (alum, message, mode) => {
     if (!user || !db) return;
     try {
@@ -356,9 +355,7 @@ export default function App() {
   };
 
   const handleRateMentor = async (alum) => {
-    // Simulation of updating DB rating
     Alert.alert("Rated!", `You gave ${alum.name} 5 stars.`);
-    // In real app: calculate average and updateDoc(alumRef, { "stats.rating": newAvg })
   };
 
   const handleRequestAction = async (reqId, newStatus) => {
@@ -377,6 +374,8 @@ export default function App() {
     return (
       <View style={styles.webBackground}>
         <View style={styles.webContainer}>
+          {/* FIX: If we are onboarding, show that screen. Otherwise Auth. */}
+          {/* NOTE: We rely on local state 'isOnboarding' which is set during Signup */}
           {isOnboarding ? (
              <OnboardingScreen onComplete={handleOnboardingComplete} />
           ) : (
@@ -391,6 +390,17 @@ export default function App() {
         </View>
       </View>
     );
+  }
+
+  // Note: If user exists BUT isOnboarding is still true (rare race condition), we could force show Onboarding
+  if (isOnboarding) {
+      return (
+        <View style={styles.webBackground}>
+            <View style={styles.webContainer}>
+                <OnboardingScreen onComplete={handleOnboardingComplete} />
+            </View>
+        </View>
+      );
   }
 
   return (
@@ -487,11 +497,10 @@ export default function App() {
 const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
   const [text, setText] = useState('');
   const [commentText, setCommentText] = useState('');
-  const [activePostId, setActivePostId] = useState(null); // To show comment input
+  const [activePostId, setActivePostId] = useState(null);
   
   return (
     <View style={styles.screenContainer}>
-      {/* NEW: Always Visible Post Input */}
       <View style={styles.postComposer}>
         <View style={{flexDirection:'row', alignItems:'center'}}>
           <Avatar size={40} />
@@ -534,7 +543,6 @@ const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
               </View>
               <Text style={styles.postContent}>{post.content}</Text>
               
-              {/* Comments Display */}
               {post.comments && post.comments.length > 0 && (
                   <View style={styles.commentSection}>
                       {post.comments.map((c, i) => (
@@ -556,7 +564,6 @@ const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
                 </TouchableOpacity>
               </View>
 
-              {/* Comment Input */}
               {activePostId === post.id && (
                   <View style={{flexDirection: 'row', marginTop: 10}}>
                       <TextInput 
@@ -620,8 +627,6 @@ const DetailScreen = ({ alum, currentUserUid, onBack, onConnect, onRate }) => {
   const [message, setMessage] = useState('');
   const [mode, setMode] = useState('Video Call');
   const isSelf = alum.uid === currentUserUid;
-
-  // Use stats from DB or default
   const stats = alum.stats || { rating: 5.0, sessions: 0, experience: 0 };
 
   return (
@@ -635,7 +640,6 @@ const DetailScreen = ({ alum, currentUserUid, onBack, onConnect, onRate }) => {
           <Text style={styles.detailName}>{alum.name}</Text>
           <Text style={styles.detailInfo}>{alum.role} @ {alum.company}</Text>
           
-          {/* DYNAMIC STATS FROM DB */}
           <View style={styles.statsRow}>
             <View style={styles.statItem}><Text style={styles.statVal}>{stats.rating}</Text><Text style={styles.statLabel}>Rating</Text></View>
             <View style={styles.statItem}><Text style={styles.statVal}>{stats.sessions}</Text><Text style={styles.statLabel}>Sessions</Text></View>
