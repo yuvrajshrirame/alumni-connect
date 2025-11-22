@@ -15,7 +15,6 @@ import {
   Image,
   Modal,
   Share,
-  Dimensions,
   BackHandler 
 } from 'react-native';
 import { MaterialIcons, Ionicons, FontAwesome5 } from '@expo/vector-icons';
@@ -45,7 +44,8 @@ import {
   orderBy,
   getDoc,
   increment,
-  arrayUnion
+  arrayUnion,
+  arrayRemove
 } from 'firebase/firestore';
 
 // --- 2. FIREBASE CONFIGURATION ---
@@ -102,15 +102,10 @@ export default function App() {
         setCurrentTab('home');
         return true;
       }
-      // Default behavior (Exit App)
       return false; 
     };
 
-    const backHandler = BackHandler.addEventListener(
-      "hardwareBackPress",
-      backAction
-    );
-
+    const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
     return () => backHandler.remove();
   }, [currentTab, selectedAlum, isEditingProfile]);
 
@@ -126,11 +121,10 @@ export default function App() {
         let bio = '';
         let batch = '';
         let experience = 0;
-        let stats = { rating: 5.0, sessions: 0, experience: 0 };
+        let stats = { rating: 5.0, ratingCount: 1, sessions: 0, experience: 0 };
 
         // Fetch extended profile from DB
         try {
-            // Query 'alumni' collection first if role is Alumni
             if (role === 'Alumni') {
                 const q = query(collection(db, "alumni"), where("uid", "==", currentUser.uid));
                 const snapshot = await getDocs(q);
@@ -139,7 +133,6 @@ export default function App() {
                     company = docData.company || 'N/A';
                     bio = docData.bio || '';
                     batch = docData.batch || '';
-                    experience = docData.stats?.experience || 0;
                     if(docData.stats) stats = docData.stats;
                 }
             }
@@ -153,7 +146,6 @@ export default function App() {
           company: company,
           bio: bio,
           batch: batch,
-          experience: experience,
           stats: stats
         });
 
@@ -179,8 +171,11 @@ export default function App() {
       const list = [];
       querySnapshot.forEach((doc) => {
         const data = doc.data();
-        // HIDE SELF FROM DIRECTORY
+        // STRICT FILTER: Remove invalid data, self, and non-alumni
+        if (!data.name || !data.uid) return; 
         if (user && data.uid === user.uid) return;
+        if (data.role !== 'Alumni') return;
+        
         list.push({ id: doc.id, ...data });
       });
       setAlumniList(list);
@@ -224,7 +219,6 @@ export default function App() {
     setIsLoading(true);
     try { 
       await createUserWithEmailAndPassword(auth, email, password);
-      // Trigger Onboarding Flow
       setIsOnboarding(true); 
       setIsLoading(false);
     } catch (error) { Alert.alert("Signup Failed", error.message); setIsLoading(false); }
@@ -234,12 +228,10 @@ export default function App() {
     setIsLoading(true);
     try {
       const currentUser = auth.currentUser;
-      // 1. Update Core Auth Profile
       await updateProfile(currentUser, { displayName: name, photoURL: role });
       
-      const stats = { rating: 5.0, sessions: 0, experience: experience || 0 };
+      const stats = { rating: 5.0, ratingCount: 1, sessions: 0, experience: experience || 0 };
 
-      // 2. Save to Alumni Database (This ensures they appear in Directory)
       if (role === 'Alumni') {
         await addDoc(collection(db, "alumni"), {
           name, email: currentUser.email, role, bio, 
@@ -250,10 +242,9 @@ export default function App() {
         });
       }
       
-      // 3. Update Local State
       setUser({ 
         uid: currentUser.uid, email: currentUser.email, name, role, bio, 
-        company: company || 'N/A', batch: batch, experience: experience, stats: stats 
+        company: company || 'N/A', batch: batch, stats: stats 
       });
       
       setIsOnboarding(false);
@@ -266,7 +257,6 @@ export default function App() {
       { text: "Cancel", style: "cancel" },
       { text: "Log Out", style: "destructive", onPress: async () => {
           await signOut(auth);
-          // CRITICAL FIX: Reset all states including onboarding
           setIsOnboarding(false);
           setCurrentTab('home');
           setMyRequests([]);
@@ -284,17 +274,12 @@ export default function App() {
       if (newEmail && newEmail !== user.email) await updateEmail(auth.currentUser, newEmail);
       if (newPassword && newPassword.length > 0) await updatePassword(auth.currentUser, newPassword);
 
-      // Update Firestore if Alumni
       if (user.role === 'Alumni') {
           const q = query(collection(db, "alumni"), where("uid", "==", user.uid));
           const snapshot = await getDocs(q);
           if (!snapshot.empty) {
               const docRef = snapshot.docs[0].ref;
-              await updateDoc(docRef, { 
-                  name: newName, 
-                  bio: newBio, 
-                  company: newCompany 
-              });
+              await updateDoc(docRef, { name: newName, bio: newBio, company: newCompany });
           }
       }
 
@@ -307,36 +292,45 @@ export default function App() {
     setIsLoading(false);
   };
 
+  // --- FEED ACTIONS ---
   const handlePostSubmit = async (content) => {
     if (!content.trim()) return;
     try {
       await addDoc(collection(db, "posts"), {
         author: user.name, authorRole: user.role, authorCompany: user.company,
-        content: content, date: new Date().toLocaleDateString(), likes: 0, comments: []
+        content: content, date: new Date().toLocaleDateString(), likedBy: [], comments: []
       });
       fetchFeed(); 
       Alert.alert("Posted", "Shared to community.");
     } catch(e) { Alert.alert("Error", e.message); }
   };
 
-  const handleLikePost = async (postId) => {
+  const handleLikePost = async (post) => {
       try {
-          const postRef = doc(db, "posts", postId);
-          await updateDoc(postRef, { likes: increment(1) });
-          setFeedPosts(prev => prev.map(p => p.id === postId ? {...p, likes: (p.likes || 0) + 1} : p));
+          const postRef = doc(db, "posts", post.id);
+          const isLiked = post.likedBy && post.likedBy.includes(user.uid);
+          
+          if (isLiked) {
+             await updateDoc(postRef, { likedBy: arrayRemove(user.uid) });
+          } else {
+             await updateDoc(postRef, { likedBy: arrayUnion(user.uid) });
+          }
+          fetchFeed();
       } catch (e) { console.log("Like error", e); }
   };
 
   const handleCommentPost = async (postId, commentText) => {
+      if (!commentText.trim()) return;
       try {
           const postRef = doc(db, "posts", postId);
           await updateDoc(postRef, { 
-              comments: arrayUnion({ user: user.name, text: commentText }) 
+              comments: arrayUnion({ user: user.name, text: commentText, role: user.role }) 
           });
           fetchFeed(); 
       } catch (e) { Alert.alert("Error", "Could not comment."); }
   };
 
+  // --- MENTOR ACTIONS ---
   const sendRequest = async (alum, message, mode) => {
     if (!user || !db) return;
     try {
@@ -354,8 +348,27 @@ export default function App() {
     } catch (e) { Alert.alert("Error", e.message); }
   };
 
-  const handleRateMentor = async (alum) => {
-    Alert.alert("Rated!", `You gave ${alum.name} 5 stars.`);
+  const handleRateMentor = async (alum, rating) => {
+    try {
+        const alumRef = doc(db, "alumni", alum.id);
+        const currentStats = alum.stats || { rating: 5.0, ratingCount: 1, experience: 0, sessions: 0 };
+        
+        // Calculate new weighted average
+        const newCount = (currentStats.ratingCount || 1) + 1;
+        const currentTotal = (currentStats.rating || 5.0) * (currentStats.ratingCount || 1);
+        const newRating = ((currentTotal + rating) / newCount).toFixed(1);
+
+        await updateDoc(alumRef, {
+            "stats.rating": parseFloat(newRating),
+            "stats.ratingCount": newCount
+        });
+        
+        Alert.alert("Success", `You rated ${alum.name} ${rating} stars.`);
+        // Update local view
+        setSelectedAlum({ ...alum, stats: { ...currentStats, rating: parseFloat(newRating), ratingCount: newCount } });
+    } catch (e) {
+        Alert.alert("Error", "Could not submit rating.");
+    }
   };
 
   const handleRequestAction = async (reqId, newStatus) => {
@@ -374,8 +387,6 @@ export default function App() {
     return (
       <View style={styles.webBackground}>
         <View style={styles.webContainer}>
-          {/* FIX: If we are onboarding, show that screen. Otherwise Auth. */}
-          {/* NOTE: We rely on local state 'isOnboarding' which is set during Signup */}
           {isOnboarding ? (
              <OnboardingScreen onComplete={handleOnboardingComplete} />
           ) : (
@@ -390,17 +401,6 @@ export default function App() {
         </View>
       </View>
     );
-  }
-
-  // Note: If user exists BUT isOnboarding is still true (rare race condition), we could force show Onboarding
-  if (isOnboarding) {
-      return (
-        <View style={styles.webBackground}>
-            <View style={styles.webContainer}>
-                <OnboardingScreen onComplete={handleOnboardingComplete} />
-            </View>
-        </View>
-      );
   }
 
   return (
@@ -519,19 +519,16 @@ const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
         )}
       </View>
 
-      <View style={styles.feedHeader}>
-        <Text style={styles.sectionTitle}>Latest Updates</Text>
-        <TouchableOpacity onPress={onRefresh}><Ionicons name="refresh" size={20} color="#4F46E5" /></TouchableOpacity>
-      </View>
-
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{paddingBottom: 20}}>
-        {posts.length === 0 ? (
+        {posts.length === 0 && (
           <View style={styles.emptyState}>
             <Text style={styles.emptyText}>No posts yet.</Text>
             <Text style={styles.emptySubText}>Be the first to share something!</Text>
           </View>
-        ) : (
-          posts.map((post, index) => (
+        )}
+        {posts.map((post, index) => {
+            const isLiked = post.likedBy && post.likedBy.includes(user.uid);
+            return (
             <View key={index} style={styles.postCard}>
               <View style={styles.postHeader}>
                 <Avatar size={40} />
@@ -547,16 +544,17 @@ const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
                   <View style={styles.commentSection}>
                       {post.comments.map((c, i) => (
                           <Text key={i} style={styles.commentText}>
-                              <Text style={{fontWeight: 'bold'}}>{c.user}: </Text>{c.text}
+                              <Text style={{fontWeight: 'bold'}}>{c.user} {c.role === 'Alumni' && <Text style={{color: '#4F46E5', fontSize: 10}}>✓ Alumni</Text>}: </Text>
+                              {c.text}
                           </Text>
                       ))}
                   </View>
               )}
 
               <View style={styles.postActions}>
-                <TouchableOpacity style={styles.actionItem} onPress={() => onLike(post.id)}>
-                  <Ionicons name="heart-outline" size={20} color="#6B7280" />
-                  <Text style={styles.actionText}>{post.likes || 0} Likes</Text>
+                <TouchableOpacity style={styles.actionItem} onPress={() => onLike(post)}>
+                  <Ionicons name={isLiked ? "heart" : "heart-outline"} size={20} color={isLiked ? "#EF4444" : "#6B7280"} />
+                  <Text style={[styles.actionText, isLiked && {color: '#EF4444'}]}>{post.likedBy?.length || 0} Likes</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.actionItem} onPress={() => setActivePostId(activePostId === post.id ? null : post.id)}>
                   <Ionicons name="chatbubble-outline" size={20} color="#6B7280" />
@@ -581,8 +579,8 @@ const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
                   </View>
               )}
             </View>
-          ))
-        )}
+          );
+        })}
       </ScrollView>
     </View>
   );
@@ -590,7 +588,6 @@ const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
 
 const MentorsScreen = ({ alumni, onSelect, onRefresh }) => {
   const [search, setSearch] = useState('');
-  
   const filtered = alumni.filter(a => {
     const s = search.toLowerCase();
     return (a.name||'').toLowerCase().includes(s) || (a.company||'').toLowerCase().includes(s);
@@ -626,6 +623,7 @@ const MentorsScreen = ({ alumni, onSelect, onRefresh }) => {
 const DetailScreen = ({ alum, currentUserUid, onBack, onConnect, onRate }) => {
   const [message, setMessage] = useState('');
   const [mode, setMode] = useState('Video Call');
+  const [showRating, setShowRating] = useState(false);
   const isSelf = alum.uid === currentUserUid;
   const stats = alum.stats || { rating: 5.0, sessions: 0, experience: 0 };
 
@@ -639,7 +637,6 @@ const DetailScreen = ({ alum, currentUserUid, onBack, onConnect, onRate }) => {
           <Avatar size={100} />
           <Text style={styles.detailName}>{alum.name}</Text>
           <Text style={styles.detailInfo}>{alum.role} @ {alum.company}</Text>
-          
           <View style={styles.statsRow}>
             <View style={styles.statItem}><Text style={styles.statVal}>{stats.rating}</Text><Text style={styles.statLabel}>Rating</Text></View>
             <View style={styles.statItem}><Text style={styles.statVal}>{stats.sessions}</Text><Text style={styles.statLabel}>Sessions</Text></View>
@@ -662,19 +659,34 @@ const DetailScreen = ({ alum, currentUserUid, onBack, onConnect, onRate }) => {
                 </TouchableOpacity>
               ))}
             </View>
-            <TextInput 
-              style={styles.msgInput} placeholder="Topic of discussion..." multiline value={message} onChangeText={setMessage} 
-            />
+            <TextInput style={styles.msgInput} placeholder="Topic..." multiline value={message} onChangeText={setMessage} />
             <TouchableOpacity style={styles.primaryButton} onPress={() => onConnect(alum, message, mode)}>
               <Text style={styles.buttonText}>Send Request</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.secondaryButton} onPress={() => onRate(alum)}>
+            <TouchableOpacity style={styles.secondaryButton} onPress={() => setShowRating(true)}>
               <Text style={styles.secondaryBtnText}>Rate Mentor</Text>
             </TouchableOpacity>
           </View>
         )}
       </ScrollView>
+
+      {/* Rating Modal */}
+      <Modal visible={showRating} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                  <Text style={styles.modalTitle}>Rate {alum.name}</Text>
+                  <View style={{flexDirection: 'row', justifyContent: 'center', gap: 10, marginBottom: 20}}>
+                      {[1, 2, 3, 4, 5].map(star => (
+                          <TouchableOpacity key={star} onPress={() => { onRate(alum, star); setShowRating(false); }}>
+                              <Ionicons name="star" size={32} color="#F59E0B" />
+                          </TouchableOpacity>
+                      ))}
+                  </View>
+                  <TouchableOpacity onPress={() => setShowRating(false)}><Text style={{textAlign:'center', color:'gray'}}>Cancel</Text></TouchableOpacity>
+              </View>
+          </View>
+      </Modal>
     </View>
   );
 };
@@ -690,6 +702,22 @@ const ProfileScreen = ({ user, onLogout, onEdit }) => {
         <Avatar size={90} />
         <Text style={styles.profileName}>{user.name}</Text>
         <Text style={styles.profileRole}>{user.role} {user.company !== 'N/A' && `• ${user.company}`}</Text>
+        
+        {/* BADGES */}
+        <View style={styles.badgeContainer}>
+            {user.role === 'Alumni' ? (
+                <View style={[styles.badgePill, {backgroundColor: '#DBEAFE'}]}>
+                    <MaterialIcons name="verified" size={14} color="#2563EB" />
+                    <Text style={[styles.badgeText, {color: '#2563EB'}]}> Verified Alumni</Text>
+                </View>
+            ) : (
+                <View style={[styles.badgePill, {backgroundColor: '#FEF3C7'}]}>
+                    <FontAwesome5 name="seedling" size={12} color="#D97706" />
+                    <Text style={[styles.badgeText, {color: '#D97706'}]}> Rising Star</Text>
+                </View>
+            )}
+        </View>
+
         <View style={{flexDirection:'row', gap: 10, marginTop: 15}}>
           <TouchableOpacity style={styles.smallBtnOutline} onPress={onEdit}><Text style={{color:'#4F46E5'}}>Edit Profile</Text></TouchableOpacity>
           <TouchableOpacity style={styles.smallBtnOutline} onPress={handleShare}><Text style={{color:'#4F46E5'}}>Share</Text></TouchableOpacity>
@@ -922,6 +950,9 @@ const styles = StyleSheet.create({
   menuContainer: { backgroundColor: '#fff', borderRadius: 15 },
   menuItem: { flexDirection: 'row', alignItems: 'center', padding: 15, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
   menuText: { flex: 1, marginLeft: 15, fontSize: 16 },
+  badgeContainer: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  badgePill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
+  badgeText: { fontSize: 12, fontWeight: 'bold', marginLeft: 5 },
 
   // Detail
   backButton: { marginBottom: 10 },
@@ -963,6 +994,11 @@ const styles = StyleSheet.create({
   actionBtn: { flex: 1, padding: 8, borderRadius: 8, alignItems: 'center' },
   emptyState: { alignItems: 'center', marginTop: 50 },
   emptyText: { fontSize: 18, fontWeight: 'bold' },
+
+  // Modals
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  modalContent: { backgroundColor: '#fff', padding: 20, borderRadius: 15, width: '80%' },
+  modalTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' },
 
   // Common
   headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
