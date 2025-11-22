@@ -146,7 +146,7 @@ export default function App() {
   const fetchInitialData = (uid, role) => {
     fetchRequests(uid, role);
     fetchFeed();
-    fetchAlumni(); // Pre-load directory
+    fetchAlumni();
   };
 
   // --- DATA FETCHING ---
@@ -183,12 +183,10 @@ export default function App() {
             const data = doc.data();
             reqs.push({ id: doc.id, ...data });
             
-            // Generate Notification Logic
             if (role === 'Alumni' && data.status === 'Pending') {
                 count++;
                 newNotifs.push({ id: doc.id, title: 'New Request', body: `From ${data.senderName}`, type: 'request', data: data });
             } else if (role === 'Student' && data.status === 'Accepted') {
-                // Check if accepted recently (simple logic for now)
                 count++;
                 newNotifs.push({ id: doc.id, title: 'Request Accepted', body: `${data.mentorName} accepted!`, type: 'chat', data: { id: doc.id, ...data } });
             }
@@ -211,7 +209,7 @@ export default function App() {
       const unsubscribe = onSnapshot(q, (querySnapshot) => {
         const posts = [];
         querySnapshot.forEach((doc) => posts.push({ id: doc.id, ...doc.data() }));
-        posts.sort((a, b) => (b.likes || 0) - (a.likes || 0)); // Sort by popularity
+        posts.sort((a, b) => (b.likes || 0) - (a.likes || 0)); 
         setFeedPosts(posts);
       });
       return unsubscribe;
@@ -333,7 +331,7 @@ export default function App() {
           let updatedComments = postData.comments || [];
 
           const newComment = {
-              id: Date.now().toString() + Math.random().toString(36).substr(2, 9), // Unique ID
+              id: Date.now().toString() + Math.random().toString(36).substr(2, 9), 
               user: user.name,
               text: commentText,
               role: user.role,
@@ -404,9 +402,7 @@ export default function App() {
   const handleNotificationClick = (notif) => {
       setShowNotifications(false);
       if (notif.type === 'request') setCurrentTab('requests');
-      if (notif.type === 'chat') {
-          setActiveChatRequest(notif.data);
-      }
+      if (notif.type === 'chat') setActiveChatRequest(notif.data);
   };
 
   // --- UI RENDERERS ---
@@ -1011,40 +1007,43 @@ const OnboardingScreen = ({ onComplete }) => {
   const [batch, setBatch] = useState('');
 
   return (
-    <KeyboardAvoidingView 
-        behavior={Platform.OS === "ios" ? "padding" : undefined} 
-        style={{flex:1}}
-    >
-        <ScrollView contentContainerStyle={{flexGrow: 1, justifyContent: 'center', padding: 20}}>
-        <View style={styles.authCard}>
-            <Text style={styles.authTitle}>Profile Setup</Text>
-            <Text style={styles.label}>Full Name</Text>
-            <TextInput style={styles.input} value={name} onChangeText={setName} />
-            <View style={{flexDirection:'row', gap:10, marginBottom:15}}>
-            {['Student', 'Alumni'].map(r => (
-                <TouchableOpacity key={r} style={[styles.roleBtn, role === r && styles.roleBtnActive]} onPress={() => setRole(r)}>
-                <Text style={[styles.roleText, role === r && {color: '#4F46E5'}]}>{r}</Text>
-                </TouchableOpacity>
-            ))}
-            </View>
-            <Text style={styles.label}>{role === 'Student' ? 'University' : 'Current Company'}</Text>
-            <TextInput style={styles.input} value={company} onChangeText={setCompany} />
-            {role === 'Alumni' && (
-            <>
-                <Text style={styles.label}>Years of Experience</Text>
-                <TextInput style={styles.input} value={exp} onChangeText={setExp} keyboardType="numeric" />
-            </>
-            )}
-            <Text style={styles.label}>Batch Year</Text>
-            <TextInput style={styles.input} value={batch} onChangeText={setBatch} keyboardType="numeric" placeholder="e.g. 2023" />
-            <Text style={styles.label}>Bio</Text>
-            <TextInput style={styles.input} value={bio} onChangeText={setBio} multiline numberOfLines={3} />
-            <TouchableOpacity style={styles.primaryButton} onPress={() => onComplete(name, role, bio, company, exp, batch)}>
-            <Text style={styles.buttonText}>Complete</Text>
-            </TouchableOpacity>
-        </View>
-        </ScrollView>
-    </KeyboardAvoidingView>
+    <SafeAreaView style={{flex:1, backgroundColor:'#fff'}}>
+      <KeyboardAvoidingView 
+          behavior={Platform.OS === "ios" ? "padding" : "height"} 
+          style={{flex:1}}
+          keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
+      >
+          <ScrollView contentContainerStyle={{padding: 20, paddingBottom: 100}}>
+          <View style={styles.authCard}>
+              <Text style={styles.authTitle}>Profile Setup</Text>
+              <Text style={styles.label}>Full Name</Text>
+              <TextInput style={styles.input} value={name} onChangeText={setName} />
+              <View style={{flexDirection:'row', gap:10, marginBottom:15}}>
+              {['Student', 'Alumni'].map(r => (
+                  <TouchableOpacity key={r} style={[styles.roleBtn, role === r && styles.roleBtnActive]} onPress={() => setRole(r)}>
+                  <Text style={[styles.roleText, role === r && {color: '#4F46E5'}]}>{r}</Text>
+                  </TouchableOpacity>
+              ))}
+              </View>
+              <Text style={styles.label}>{role === 'Student' ? 'University' : 'Current Company'}</Text>
+              <TextInput style={styles.input} value={company} onChangeText={setCompany} />
+              {role === 'Alumni' && (
+              <>
+                  <Text style={styles.label}>Years of Experience</Text>
+                  <TextInput style={styles.input} value={exp} onChangeText={setExp} keyboardType="numeric" />
+              </>
+              )}
+              <Text style={styles.label}>Batch Year</Text>
+              <TextInput style={styles.input} value={batch} onChangeText={setBatch} keyboardType="numeric" placeholder="e.g. 2023" />
+              <Text style={styles.label}>Bio</Text>
+              <TextInput style={styles.input} value={bio} onChangeText={setBio} multiline numberOfLines={3} />
+              <TouchableOpacity style={styles.primaryButton} onPress={() => onComplete(name, role, bio, company, exp, batch)}>
+              <Text style={styles.buttonText}>Complete</Text>
+              </TouchableOpacity>
+          </View>
+          </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 };
 
