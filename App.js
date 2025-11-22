@@ -91,12 +91,9 @@ export default function App() {
   const [incomingRequests, setIncomingRequests] = useState([]); 
   const [alumniList, setAlumniList] = useState([]); 
   const [feedPosts, setFeedPosts] = useState([]);
-  const [notifications, setNotifications] = useState([]);
   
   // Screen Modes
   const [isEditingProfile, setIsEditingProfile] = useState(false); 
-  const [showNotifications, setShowNotifications] = useState(false);
-  const [showNewPostModal, setShowNewPostModal] = useState(false);
 
   // --- BACK HANDLER LOGIC ---
   useEffect(() => {
@@ -187,7 +184,9 @@ export default function App() {
       const querySnapshot = await getDocs(q);
       const posts = [];
       querySnapshot.forEach((doc) => posts.push({ id: doc.id, ...doc.data() }));
-      posts.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      
+      // FIX: Sort by LIKES descending
+      posts.sort((a, b) => (b.likes || 0) - (a.likes || 0));
       setFeedPosts(posts);
     } catch (e) { console.log("Feed error", e); }
   };
@@ -507,12 +506,14 @@ export default function App() {
   );
 }
 
-// --- COMPONENT DEFINITIONS ---
+// --- SCREEN COMPONENTS ---
 
 const ChatScreen = ({ request, currentUser, onBack }) => {
     const [messages, setMessages] = useState([]);
     const [inputText, setInputText] = useState('');
     const flatListRef = useRef();
+
+    const otherPersonName = currentUser.uid === request.senderId ? request.mentorName : request.senderName;
 
     useEffect(() => {
         const q = query(collection(db, "requests", request.id, "messages"), orderBy("createdAt", "asc"));
@@ -530,7 +531,6 @@ const ChatScreen = ({ request, currentUser, onBack }) => {
             await addDoc(collection(db, "requests", request.id, "messages"), {
                 text: inputText,
                 senderId: currentUser.uid,
-                senderName: currentUser.name,
                 createdAt: serverTimestamp()
             });
             setInputText('');
@@ -538,39 +538,50 @@ const ChatScreen = ({ request, currentUser, onBack }) => {
     };
 
     return (
-        <View style={styles.screenContainer}>
-            <View style={styles.headerRow}>
-                <TouchableOpacity onPress={onBack}><Ionicons name="arrow-back" size={24} /></TouchableOpacity>
-                <Text style={styles.headerTitle}>Chat</Text>
-                <View style={{width: 24}} />
-            </View>
-            <FlatList 
-                ref={flatListRef}
-                data={messages}
-                keyExtractor={item => item.id}
-                onContentSizeChange={() => flatListRef.current?.scrollToEnd()}
-                renderItem={({item}) => {
-                    const isMe = item.senderId === currentUser.uid;
-                    return (
-                        <View style={[styles.msgBubble, isMe ? styles.msgMe : styles.msgOther]}>
-                            <Text style={[styles.msgText, isMe && {color:'#fff'}]}>{item.text}</Text>
-                        </View>
-                    );
-                }}
-                contentContainerStyle={{paddingBottom: 20}}
-            />
-            <View style={styles.chatInputBar}>
-                <TextInput 
-                    style={styles.chatInput} 
-                    placeholder="Type a message..." 
-                    value={inputText}
-                    onChangeText={setInputText}
+        <KeyboardAvoidingView 
+            style={{flex:1}} 
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 60 : 0}
+        >
+            <View style={styles.screenContainer}>
+                <View style={styles.headerRow}>
+                    <TouchableOpacity onPress={onBack}><Ionicons name="arrow-back" size={24} /></TouchableOpacity>
+                    {/* FIX: Show Other Person's Name */}
+                    <Text style={styles.headerTitle}>{otherPersonName}</Text>
+                    <View style={{width: 24}} />
+                </View>
+                <FlatList 
+                    ref={flatListRef}
+                    data={messages}
+                    keyExtractor={item => item.id}
+                    onContentSizeChange={() => flatListRef.current?.scrollToEnd()}
+                    renderItem={({item}) => {
+                        const isMe = item.senderId === currentUser.uid;
+                        return (
+                            <View style={[
+                                styles.msgBubble, 
+                                // FIX: Distinct styles
+                                isMe ? styles.msgMe : styles.msgOther
+                            ]}>
+                                <Text style={[styles.msgText, isMe && {color:'#fff'}]}>{item.text}</Text>
+                            </View>
+                        );
+                    }}
+                    contentContainerStyle={{paddingBottom: 20}}
                 />
-                <TouchableOpacity onPress={sendMessage}>
-                    <Ionicons name="send" size={24} color="#4F46E5" />
-                </TouchableOpacity>
+                <View style={styles.chatInputBar}>
+                    <TextInput 
+                        style={styles.chatInput} 
+                        placeholder="Type a message..." 
+                        value={inputText}
+                        onChangeText={setInputText}
+                    />
+                    <TouchableOpacity onPress={sendMessage}>
+                        <Ionicons name="send" size={24} color="#4F46E5" />
+                    </TouchableOpacity>
+                </View>
             </View>
-        </View>
+        </KeyboardAvoidingView>
     );
 };
 
@@ -581,116 +592,126 @@ const FeedScreen = ({ posts, user, onRefresh, onPost, onLike, onComment }) => {
   const [replyingTo, setReplyingTo] = useState(null); 
   
   return (
-    <View style={styles.screenContainer}>
-      <View style={styles.postComposer}>
-        <View style={{flexDirection:'row', alignItems:'center'}}>
-          <Avatar size={40} />
-          <TextInput 
-            style={styles.composeInput} 
-            placeholder="Share a job, tip, or update..." 
-            value={text}
-            onChangeText={setText}
-            multiline
-          />
-        </View>
-        {text.length > 0 && (
-          <TouchableOpacity style={styles.postBtn} onPress={() => { onPost(text); setText(''); }}>
-            <Text style={styles.postBtnText}>Post</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{paddingBottom: 20}}>
-        {posts.length === 0 && (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>No posts yet.</Text>
-          </View>
-        )}
-        {posts.map((post, index) => {
-            const isLiked = post.likedBy && post.likedBy.includes(user.uid);
-            return (
-            <View key={index} style={styles.postCard}>
-              <View style={styles.postHeader}>
-                <Avatar size={40} />
-                <View style={{marginLeft: 10}}>
-                  <Text style={styles.postAuthor}>{post.author}</Text>
-                  <Text style={styles.postRole}>{post.authorRole} • {post.authorCompany}</Text>
-                </View>
-                <Text style={styles.postDate}>{post.date}</Text>
-              </View>
-              <Text style={styles.postContent}>{post.content}</Text>
-              
-              {/* NESTED COMMENTS */}
-              {post.comments && post.comments.length > 0 && (
-                  <View style={styles.commentSection}>
-                      {post.comments.map((c) => (
-                          <View key={c.id} style={{marginBottom: 8}}>
-                              <TouchableOpacity onLongPress={() => { setActivePostId(post.id); setReplyingTo({id: c.id, user: c.user}); }}>
-                                <Text style={styles.commentText}>
-                                    <Text style={{fontWeight: 'bold'}}>{c.user} 
-                                    {c.role === 'Alumni' && <Text style={{color: '#4F46E5', fontSize: 10}}> ✓</Text>}
-                                    : </Text>
-                                    {c.text}
-                                </Text>
-                              </TouchableOpacity>
-                              {c.replies && c.replies.map(r => (
-                                  <Text key={r.id} style={[styles.commentText, {marginLeft: 15, color: '#666'}]}>
-                                      <Text style={{fontWeight: 'bold'}}>↳ {r.user}
-                                      {r.role === 'Alumni' && <Text style={{color: '#4F46E5', fontSize: 10}}> ✓</Text>}
-                                      : </Text> 
-                                      {r.text}
-                                  </Text>
-                              ))}
-                          </View>
-                      ))}
-                  </View>
-              )}
-
-              <View style={styles.postActions}>
-                <TouchableOpacity style={styles.actionItem} onPress={() => onLike(post)}>
-                  <Ionicons name={isLiked ? "heart" : "heart-outline"} size={20} color={isLiked ? "#EF4444" : "#6B7280"} />
-                  <Text style={[styles.actionText, isLiked && {color: '#EF4444'}]}>{post.likedBy?.length || 0} Likes</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.actionItem} onPress={() => { setActivePostId(activePostId === post.id ? null : post.id); setReplyingTo(null); }}>
-                  <Ionicons name="chatbubble-outline" size={20} color="#6B7280" />
-                  <Text style={styles.actionText}>Comment</Text>
-                </TouchableOpacity>
-              </View>
-
-              {activePostId === post.id && (
-                  <View style={{marginTop: 10}}>
-                      {replyingTo && <Text style={{fontSize:10, color:'#666', marginBottom:2}}>Replying to {replyingTo.user}...</Text>}
-                      <View style={{flexDirection: 'row'}}>
-                        <TextInput 
-                            style={[styles.input, {flex: 1, marginBottom: 0, paddingVertical: 8}]} 
-                            placeholder={replyingTo ? "Write a reply..." : "Write a comment..."} 
-                            value={commentText}
-                            onChangeText={setCommentText}
-                        />
-                        <TouchableOpacity 
-                            style={{justifyContent: 'center', marginLeft: 10}}
-                            onPress={() => { 
-                                onComment(post.id, commentText, replyingTo?.id); 
-                                setCommentText(''); 
-                                setActivePostId(null); 
-                                setReplyingTo(null);
-                            }}
-                        >
-                            <Text style={{color: '#4F46E5', fontWeight: 'bold'}}>Send</Text>
-                        </TouchableOpacity>
-                      </View>
-                  </View>
-              )}
+    <KeyboardAvoidingView 
+        style={{flex:1}} 
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 100 : 0}
+    >
+        <View style={styles.screenContainer}>
+        <View style={styles.postComposer}>
+            <View style={{flexDirection:'row', alignItems:'center'}}>
+            <Avatar size={40} />
+            <TextInput 
+                style={styles.composeInput} 
+                placeholder="Share a job, tip, or update..." 
+                value={text}
+                onChangeText={setText}
+                multiline
+            />
             </View>
-          );
-        })}
-      </ScrollView>
-    </View>
+            {text.length > 0 && (
+            <TouchableOpacity style={styles.postBtn} onPress={() => { onPost(text); setText(''); }}>
+                <Text style={styles.postBtnText}>Post</Text>
+            </TouchableOpacity>
+            )}
+        </View>
+
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{paddingBottom: 20}}>
+            {posts.length === 0 && (
+            <View style={styles.emptyState}>
+                <Text style={styles.emptyText}>No posts yet.</Text>
+            </View>
+            )}
+            {posts.map((post, index) => {
+                const isLiked = post.likedBy && post.likedBy.includes(user.uid);
+                return (
+                <View key={index} style={styles.postCard}>
+                <View style={styles.postHeader}>
+                    <Avatar size={40} />
+                    <View style={{marginLeft: 10}}>
+                    <Text style={styles.postAuthor}>{post.author}</Text>
+                    <Text style={styles.postRole}>{post.authorRole} • {post.authorCompany}</Text>
+                    </View>
+                    <Text style={styles.postDate}>{post.date}</Text>
+                </View>
+                <Text style={styles.postContent}>{post.content}</Text>
+                
+                {/* NESTED COMMENTS */}
+                {post.comments && post.comments.length > 0 && (
+                    <View style={styles.commentSection}>
+                        {post.comments.map((c) => (
+                            <View key={c.id} style={{marginBottom: 8}}>
+                                <TouchableOpacity onLongPress={() => { setActivePostId(post.id); setReplyingTo({id: c.id, user: c.user}); }}>
+                                    <Text style={styles.commentText}>
+                                        <Text style={{fontWeight: 'bold'}}>{c.user} 
+                                        {c.role === 'Alumni' && <Text style={{color: '#4F46E5', fontSize: 10}}> ✓</Text>}
+                                        : </Text>
+                                        {c.text}
+                                    </Text>
+                                </TouchableOpacity>
+                                {/* Replies - Indented and Styled */}
+                                {c.replies && c.replies.map(r => (
+                                    <View key={r.id} style={styles.replyContainer}>
+                                        <Text style={styles.replyText}>
+                                            <Text style={{fontWeight: 'bold'}}>{r.user}
+                                            {r.role === 'Alumni' && <Text style={{color: '#4F46E5', fontSize: 10}}> ✓</Text>}
+                                            : </Text> 
+                                            {r.text}
+                                        </Text>
+                                    </View>
+                                ))}
+                            </View>
+                        ))}
+                    </View>
+                )}
+
+                <View style={styles.postActions}>
+                    <TouchableOpacity style={styles.actionItem} onPress={() => onLike(post)}>
+                    <Ionicons name={isLiked ? "heart" : "heart-outline"} size={20} color={isLiked ? "#EF4444" : "#6B7280"} />
+                    <Text style={[styles.actionText, isLiked && {color: '#EF4444'}]}>{post.likedBy?.length || 0} Likes</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.actionItem} onPress={() => { setActivePostId(activePostId === post.id ? null : post.id); setReplyingTo(null); }}>
+                    <Ionicons name="chatbubble-outline" size={20} color="#6B7280" />
+                    <Text style={styles.actionText}>Comment</Text>
+                    </TouchableOpacity>
+                </View>
+
+                {activePostId === post.id && (
+                    <View style={{marginTop: 10}}>
+                        {replyingTo && <Text style={{fontSize:10, color:'#666', marginBottom:2}}>Replying to {replyingTo.user}...</Text>}
+                        <View style={{flexDirection: 'row'}}>
+                            <TextInput 
+                                style={[styles.input, {flex: 1, marginBottom: 0, paddingVertical: 8}]} 
+                                placeholder={replyingTo ? "Write a reply..." : "Write a comment..."} 
+                                value={commentText}
+                                onChangeText={setCommentText}
+                            />
+                            <TouchableOpacity 
+                                style={{justifyContent: 'center', marginLeft: 10}}
+                                onPress={() => { 
+                                    onComment(post.id, commentText, replyingTo?.id); 
+                                    setCommentText(''); 
+                                    setActivePostId(null); 
+                                    setReplyingTo(null);
+                                }}
+                            >
+                                <Text style={{color: '#4F46E5', fontWeight: 'bold'}}>Send</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                )}
+                </View>
+            );
+            })}
+        </ScrollView>
+        </View>
+    </KeyboardAvoidingView>
   );
 };
 
 const MentorsScreen = ({ alumni, onSelect, onRefresh }) => {
   const [search, setSearch] = useState('');
+  
   const filtered = alumni.filter(a => {
     const s = search.toLowerCase();
     return (a.name||'').toLowerCase().includes(s) || (a.company||'').toLowerCase().includes(s);
@@ -730,58 +751,63 @@ const DetailScreen = ({ alum, currentUserUid, onBack, onConnect, onRate }) => {
   const stats = alum.stats || { rating: 0.0, sessions: 0, experience: 0 };
 
   return (
-    <View style={styles.screenContainer}>
-      <TouchableOpacity onPress={onBack} style={styles.backButton}>
-        <Ionicons name="arrow-back" size={24} color="#333" />
-      </TouchableOpacity>
-      <ScrollView contentContainerStyle={{paddingBottom: 40}}>
-        <View style={styles.detailHeader}>
-          <Avatar size={100} />
-          <Text style={styles.detailName}>{alum.name}</Text>
-          <Text style={styles.detailInfo}>{alum.role} @ {alum.company}</Text>
-          <View style={styles.statsRow}>
-            <View style={styles.statItem}><Text style={styles.statVal}>{stats.rating}</Text><Text style={styles.statLabel}>Rating</Text></View>
-            <View style={styles.statItem}><Text style={styles.statVal}>{stats.sessions}</Text><Text style={styles.statLabel}>Sessions</Text></View>
-            <View style={styles.statItem}><Text style={styles.statVal}>{stats.experience}yr</Text><Text style={styles.statLabel}>Exp</Text></View>
-          </View>
+    <KeyboardAvoidingView 
+        behavior={Platform.OS === "ios" ? "padding" : "height"} 
+        style={{flex:1}}
+    >
+        <View style={styles.screenContainer}>
+        <TouchableOpacity onPress={onBack} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color="#333" />
+        </TouchableOpacity>
+        <ScrollView contentContainerStyle={{paddingBottom: 40}}>
+            <View style={styles.detailHeader}>
+            <Avatar size={100} />
+            <Text style={styles.detailName}>{alum.name}</Text>
+            <Text style={styles.detailInfo}>{alum.role} @ {alum.company}</Text>
+            <View style={styles.statsRow}>
+                <View style={styles.statItem}><Text style={styles.statVal}>{stats.rating}</Text><Text style={styles.statLabel}>Rating</Text></View>
+                <View style={styles.statItem}><Text style={styles.statVal}>{stats.sessions}</Text><Text style={styles.statLabel}>Sessions</Text></View>
+                <View style={styles.statItem}><Text style={styles.statVal}>{stats.experience}yr</Text><Text style={styles.statLabel}>Exp</Text></View>
+            </View>
+            </View>
+
+            <View style={styles.detailSection}>
+            <Text style={styles.sectionHeader}>About</Text>
+            <Text style={styles.sectionText}>{alum.bio || "No bio available."}</Text>
+            </View>
+
+            {!isSelf && (
+            <View style={styles.detailSection}>
+                <Text style={styles.sectionHeader}>Request Session</Text>
+                <TextInput style={styles.msgInput} placeholder="Why do you want to connect?" multiline value={message} onChangeText={setMessage} />
+                <TouchableOpacity style={styles.primaryButton} onPress={() => onConnect(alum, message)}>
+                <Text style={styles.buttonText}>Send Request</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.secondaryButton} onPress={() => setShowRating(true)}>
+                <Text style={styles.secondaryBtnText}>Rate Mentor</Text>
+                </TouchableOpacity>
+            </View>
+            )}
+        </ScrollView>
+
+        <Modal visible={showRating} transparent animationType="fade">
+            <View style={styles.modalOverlay}>
+                <View style={styles.modalContent}>
+                    <Text style={styles.modalTitle}>Rate {alum.name}</Text>
+                    <View style={{flexDirection: 'row', justifyContent: 'center', gap: 10, marginBottom: 20}}>
+                        {[1, 2, 3, 4, 5].map(star => (
+                            <TouchableOpacity key={star} onPress={() => { onRate(alum, star); setShowRating(false); }}>
+                                <Ionicons name="star" size={32} color="#F59E0B" />
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                    <TouchableOpacity onPress={() => setShowRating(false)}><Text style={{textAlign:'center', color:'gray'}}>Cancel</Text></TouchableOpacity>
+                </View>
+            </View>
+        </Modal>
         </View>
-
-        <View style={styles.detailSection}>
-          <Text style={styles.sectionHeader}>About</Text>
-          <Text style={styles.sectionText}>{alum.bio || "No bio available."}</Text>
-        </View>
-
-        {!isSelf && (
-          <View style={styles.detailSection}>
-            <Text style={styles.sectionHeader}>Request Session</Text>
-            <TextInput style={styles.msgInput} placeholder="Why do you want to connect?" multiline value={message} onChangeText={setMessage} />
-            <TouchableOpacity style={styles.primaryButton} onPress={() => onConnect(alum, message)}>
-              <Text style={styles.buttonText}>Send Request</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.secondaryButton} onPress={() => setShowRating(true)}>
-              <Text style={styles.secondaryBtnText}>Rate Mentor</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-      </ScrollView>
-
-      <Modal visible={showRating} transparent animationType="fade">
-          <View style={styles.modalOverlay}>
-              <View style={styles.modalContent}>
-                  <Text style={styles.modalTitle}>Rate {alum.name}</Text>
-                  <View style={{flexDirection: 'row', justifyContent: 'center', gap: 10, marginBottom: 20}}>
-                      {[1, 2, 3, 4, 5].map(star => (
-                          <TouchableOpacity key={star} onPress={() => { onRate(alum, star); setShowRating(false); }}>
-                              <Ionicons name="star" size={32} color="#F59E0B" />
-                          </TouchableOpacity>
-                      ))}
-                  </View>
-                  <TouchableOpacity onPress={() => setShowRating(false)}><Text style={{textAlign:'center', color:'gray'}}>Cancel</Text></TouchableOpacity>
-              </View>
-          </View>
-      </Modal>
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -840,32 +866,37 @@ const EditProfileScreen = ({ user, onCancel, onSave }) => {
   const [company, setCompany] = useState(user.company);
   
   return (
-    <View style={styles.screenContainer}>
-      <View style={styles.headerRow}>
-        <TouchableOpacity onPress={onCancel}><Ionicons name="arrow-back" size={24} /></TouchableOpacity>
-        <Text style={styles.headerTitle}>Edit Profile</Text>
-        <View style={{width:24}}/>
-      </View>
-      <ScrollView>
-        <Text style={styles.label}>Full Name</Text>
-        <TextInput style={styles.input} value={name} onChangeText={setName} />
-        <Text style={styles.label}>Bio</Text>
-        <TextInput style={styles.input} value={bio} onChangeText={setBio} multiline />
-        {user.role === 'Alumni' && (
-            <>
-                <Text style={styles.label}>Company</Text>
-                <TextInput style={styles.input} value={company} onChangeText={setCompany} />
-            </>
-        )}
-        <Text style={styles.label}>Email</Text>
-        <TextInput style={styles.input} value={email} onChangeText={setEmail} autoCapitalize="none" />
-        <Text style={styles.label}>New Password</Text>
-        <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder="Leave empty to keep current" secureTextEntry />
-        <TouchableOpacity style={styles.primaryButton} onPress={() => onSave(name, email, password, bio, company)}>
-          <Text style={styles.buttonText}>Save Changes</Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </View>
+    <KeyboardAvoidingView 
+        behavior={Platform.OS === "ios" ? "padding" : "height"} 
+        style={{flex:1}}
+    >
+        <View style={styles.screenContainer}>
+        <View style={styles.headerRow}>
+            <TouchableOpacity onPress={onCancel}><Ionicons name="arrow-back" size={24} /></TouchableOpacity>
+            <Text style={styles.headerTitle}>Edit Profile</Text>
+            <View style={{width:24}}/>
+        </View>
+        <ScrollView>
+            <Text style={styles.label}>Full Name</Text>
+            <TextInput style={styles.input} value={name} onChangeText={setName} />
+            <Text style={styles.label}>Bio</Text>
+            <TextInput style={styles.input} value={bio} onChangeText={setBio} multiline />
+            {user.role === 'Alumni' && (
+                <>
+                    <Text style={styles.label}>Company</Text>
+                    <TextInput style={styles.input} value={company} onChangeText={setCompany} />
+                </>
+            )}
+            <Text style={styles.label}>Email</Text>
+            <TextInput style={styles.input} value={email} onChangeText={setEmail} autoCapitalize="none" />
+            <Text style={styles.label}>New Password</Text>
+            <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder="Leave empty to keep current" secureTextEntry />
+            <TouchableOpacity style={styles.primaryButton} onPress={() => onSave(name, email, password, bio, company)}>
+            <Text style={styles.buttonText}>Save Changes</Text>
+            </TouchableOpacity>
+        </ScrollView>
+        </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -923,35 +954,40 @@ const OnboardingScreen = ({ onComplete }) => {
   const [batch, setBatch] = useState('');
 
   return (
-    <ScrollView contentContainerStyle={{flexGrow: 1, justifyContent: 'center', padding: 20}}>
-      <View style={styles.authCard}>
-        <Text style={styles.authTitle}>Profile Setup</Text>
-        <Text style={styles.label}>Full Name</Text>
-        <TextInput style={styles.input} value={name} onChangeText={setName} />
-        <View style={{flexDirection:'row', gap:10, marginBottom:15}}>
-          {['Student', 'Alumni'].map(r => (
-            <TouchableOpacity key={r} style={[styles.roleBtn, role === r && styles.roleBtnActive]} onPress={() => setRole(r)}>
-              <Text style={[styles.roleText, role === r && {color: '#4F46E5'}]}>{r}</Text>
+    <KeyboardAvoidingView 
+        behavior={Platform.OS === "ios" ? "padding" : "height"} 
+        style={{flex:1}}
+    >
+        <ScrollView contentContainerStyle={{flexGrow: 1, justifyContent: 'center', padding: 20}}>
+        <View style={styles.authCard}>
+            <Text style={styles.authTitle}>Profile Setup</Text>
+            <Text style={styles.label}>Full Name</Text>
+            <TextInput style={styles.input} value={name} onChangeText={setName} />
+            <View style={{flexDirection:'row', gap:10, marginBottom:15}}>
+            {['Student', 'Alumni'].map(r => (
+                <TouchableOpacity key={r} style={[styles.roleBtn, role === r && styles.roleBtnActive]} onPress={() => setRole(r)}>
+                <Text style={[styles.roleText, role === r && {color: '#4F46E5'}]}>{r}</Text>
+                </TouchableOpacity>
+            ))}
+            </View>
+            <Text style={styles.label}>{role === 'Student' ? 'University' : 'Current Company'}</Text>
+            <TextInput style={styles.input} value={company} onChangeText={setCompany} />
+            {role === 'Alumni' && (
+            <>
+                <Text style={styles.label}>Years of Experience</Text>
+                <TextInput style={styles.input} value={exp} onChangeText={setExp} keyboardType="numeric" />
+            </>
+            )}
+            <Text style={styles.label}>Batch Year</Text>
+            <TextInput style={styles.input} value={batch} onChangeText={setBatch} keyboardType="numeric" placeholder="e.g. 2023" />
+            <Text style={styles.label}>Bio</Text>
+            <TextInput style={styles.input} value={bio} onChangeText={setBio} multiline numberOfLines={3} />
+            <TouchableOpacity style={styles.primaryButton} onPress={() => onComplete(name, role, bio, company, exp, batch)}>
+            <Text style={styles.buttonText}>Complete</Text>
             </TouchableOpacity>
-          ))}
         </View>
-        <Text style={styles.label}>{role === 'Student' ? 'University' : 'Current Company'}</Text>
-        <TextInput style={styles.input} value={company} onChangeText={setCompany} />
-        {role === 'Alumni' && (
-          <>
-            <Text style={styles.label}>Years of Experience</Text>
-            <TextInput style={styles.input} value={exp} onChangeText={setExp} keyboardType="numeric" />
-          </>
-        )}
-        <Text style={styles.label}>Batch Year</Text>
-        <TextInput style={styles.input} value={batch} onChangeText={setBatch} keyboardType="numeric" placeholder="e.g. 2023" />
-        <Text style={styles.label}>Bio</Text>
-        <TextInput style={styles.input} value={bio} onChangeText={setBio} multiline numberOfLines={3} />
-        <TouchableOpacity style={styles.primaryButton} onPress={() => onComplete(name, role, bio, company, exp, batch)}>
-          <Text style={styles.buttonText}>Complete</Text>
-        </TouchableOpacity>
-      </View>
-    </ScrollView>
+        </ScrollView>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -1028,6 +1064,10 @@ const styles = StyleSheet.create({
   actionText: { color: '#6B7280' },
   commentSection: { backgroundColor: '#F9FAFB', padding: 10, borderRadius: 8, marginBottom: 10 },
   commentText: { fontSize: 12, color: '#4B5563', marginBottom: 4 },
+  
+  // FIX: Reply Styles
+  replyContainer: { marginLeft: 15, marginTop: 5, paddingLeft: 10, borderLeftWidth: 2, borderLeftColor: '#E5E7EB' },
+  replyText: { fontSize: 12, color: '#666' },
 
   // Directory & Search
   searchBox: { flexDirection: 'row', backgroundColor: '#F9FAFB', padding: 12, borderRadius: 12, marginBottom: 15 },
@@ -1095,8 +1135,11 @@ const styles = StyleSheet.create({
   chatInputBar: { flexDirection: 'row', alignItems: 'center', padding: 10, borderTopWidth: 1, borderTopColor: '#E5E7EB' },
   chatInput: { flex: 1, backgroundColor: '#F9FAFB', borderRadius: 20, padding: 10, marginRight: 10 },
   msgBubble: { padding: 10, borderRadius: 15, marginBottom: 10, maxWidth: '80%' },
-  msgMe: { backgroundColor: '#4F46E5', alignSelf: 'flex-end' },
-  msgOther: { backgroundColor: '#E5E7EB', alignSelf: 'flex-start' },
+  
+  // FIX: Distinct Chat Colors and Alignment
+  msgMe: { backgroundColor: '#4F46E5', alignSelf: 'flex-end' }, // Blue, Right
+  msgOther: { backgroundColor: '#E5E7EB', alignSelf: 'flex-start' }, // Gray, Left
+  
   msgText: { fontSize: 16 },
 
   // Modals
