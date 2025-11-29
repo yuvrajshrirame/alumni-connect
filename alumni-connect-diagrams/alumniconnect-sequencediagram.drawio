@@ -1,0 +1,145 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36" version="29.2.1">
+  <diagram name="AlumniConnectCommunitySeq" id="feluY4xq1gKW0kaQRaxG">
+    <mxGraphModel dx="539" dy="756" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="51YImgKssclaOs3soTmh-24" parent="1" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;participant=umlActor;" value="Student" vertex="1">
+          <mxGeometry height="700" width="40" x="865" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-25" parent="1" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;" value="Mobile App&#xa;(React Native)" vertex="1">
+          <mxGeometry height="700" width="100" x="1025" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-26" parent="1" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;" value="Firebase Auth" vertex="1">
+          <mxGeometry height="700" width="100" x="1225" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-27" parent="1" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;" value="Firestore DB" vertex="1">
+          <mxGeometry height="700" width="100" x="1425" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-28" parent="1" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;participant=umlActor;" value="Alumnus" vertex="1">
+          <mxGeometry height="700" width="40" x="1625" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-29" edge="1" parent="1" source="51YImgKssclaOs3soTmh-24" style="html=1;verticalAlign=bottom;endArrow=block;rounded=0;" target="51YImgKssclaOs3soTmh-25" value="1. Enter Credentials">
+          <mxGeometry relative="1" width="80" as="geometry">
+            <Array as="points">
+              <mxPoint x="965" y="280" />
+            </Array>
+            <mxPoint x="885" y="280" as="sourcePoint" />
+            <mxPoint x="1075" y="280" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-30" edge="1" parent="1" source="51YImgKssclaOs3soTmh-25" style="html=1;verticalAlign=bottom;endArrow=block;rounded=0;" target="51YImgKssclaOs3soTmh-26" value="2. Validate &amp; Get Token">
+          <mxGeometry relative="1" width="80" as="geometry">
+            <Array as="points">
+              <mxPoint x="1175" y="320" />
+            </Array>
+            <mxPoint x="1075" y="320" as="sourcePoint" />
+            <mxPoint x="1275" y="320" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-31" edge="1" parent="1" source="51YImgKssclaOs3soTmh-26" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;endSize=8;rounded=0;" target="51YImgKssclaOs3soTmh-25" value="Auth Token">
+          <mxGeometry relative="1" width="80" as="geometry">
+            <Array as="points">
+              <mxPoint x="1175" y="360" />
+            </Array>
+            <mxPoint x="1275" y="360" as="sourcePoint" />
+            <mxPoint x="1075" y="360" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-32" edge="1" parent="1" source="51YImgKssclaOs3soTmh-24" style="html=1;verticalAlign=bottom;endArrow=block;rounded=0;" target="51YImgKssclaOs3soTmh-25" value="3. Search &#39;Software Eng&#39;">
+          <mxGeometry relative="1" width="80" as="geometry">
+            <Array as="points">
+              <mxPoint x="965" y="400" />
+            </Array>
+            <mxPoint x="885" y="400" as="sourcePoint" />
+            <mxPoint x="1075" y="400" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-33" edge="1" parent="1" source="51YImgKssclaOs3soTmh-25" style="html=1;verticalAlign=bottom;endArrow=block;rounded=0;" target="51YImgKssclaOs3soTmh-27" value="4. Query Users">
+          <mxGeometry relative="1" width="80" as="geometry">
+            <Array as="points">
+              <mxPoint x="1275" y="440" />
+            </Array>
+            <mxPoint x="1075" y="440" as="sourcePoint" />
+            <mxPoint x="1475" y="440" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-34" edge="1" parent="1" source="51YImgKssclaOs3soTmh-25" style="html=1;verticalAlign=bottom;endArrow=block;rounded=0;" target="51YImgKssclaOs3soTmh-27" value="5. Create Mentorship Request">
+          <mxGeometry relative="1" width="80" as="geometry">
+            <Array as="points">
+              <mxPoint x="1275" y="520" />
+            </Array>
+            <mxPoint x="1075" y="520" as="sourcePoint" />
+            <mxPoint x="1475" y="520" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-35" edge="1" parent="1" source="51YImgKssclaOs3soTmh-27" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;endSize=8;rounded=0;" target="51YImgKssclaOs3soTmh-28" value="6. Push Notification (Listener)">
+          <mxGeometry relative="1" width="80" as="geometry">
+            <Array as="points">
+              <mxPoint x="1565" y="560" />
+            </Array>
+            <mxPoint x="1475" y="560" as="sourcePoint" />
+            <mxPoint x="1645" y="560" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-36" parent="1" style="shape=umlFrame;whiteSpace=wrap;html=1;" value="alt" vertex="1">
+          <mxGeometry height="200" width="700" x="985" y="600" as="geometry" />
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-38" edge="1" parent="1" source="51YImgKssclaOs3soTmh-28" style="html=1;verticalAlign=bottom;endArrow=block;rounded=0;" target="51YImgKssclaOs3soTmh-25" value="7a. Reject Request">
+          <mxGeometry relative="1" width="80" as="geometry">
+            <Array as="points">
+              <mxPoint x="1365" y="640" />
+            </Array>
+            <mxPoint x="1645" y="640" as="sourcePoint" />
+            <mxPoint x="1075" y="640" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-39" edge="1" parent="1" source="51YImgKssclaOs3soTmh-36" style="endArrow=none;dashed=1;html=1;dashPattern=1 3;strokeWidth=2;rounded=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" target="51YImgKssclaOs3soTmh-36" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <Array as="points">
+              <mxPoint x="1335" y="700" />
+            </Array>
+            <mxPoint x="985" y="700" as="sourcePoint" />
+            <mxPoint x="1685" y="700" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-40" edge="1" parent="1" source="51YImgKssclaOs3soTmh-28" style="html=1;verticalAlign=bottom;endArrow=block;rounded=0;" target="51YImgKssclaOs3soTmh-25" value="7b. Accept Request">
+          <mxGeometry relative="1" width="80" as="geometry">
+            <Array as="points">
+              <mxPoint x="1365" y="740" />
+            </Array>
+            <mxPoint x="1645" y="740" as="sourcePoint" />
+            <mxPoint x="1075" y="740" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-41" edge="1" parent="1" source="51YImgKssclaOs3soTmh-25" style="html=1;verticalAlign=bottom;endArrow=block;rounded=0;" target="51YImgKssclaOs3soTmh-27" value="8. Update: Status=&#39;Accepted&#39;">
+          <mxGeometry relative="1" width="80" as="geometry">
+            <Array as="points">
+              <mxPoint x="1275" y="770" />
+            </Array>
+            <mxPoint x="1075" y="770" as="sourcePoint" />
+            <mxPoint x="1475" y="770" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-42" edge="1" parent="1" source="51YImgKssclaOs3soTmh-27" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;endSize=8;rounded=0;" target="51YImgKssclaOs3soTmh-24" value="9. Sync: Unlock Chat">
+          <mxGeometry relative="1" width="80" as="geometry">
+            <Array as="points">
+              <mxPoint x="1185" y="810" />
+            </Array>
+            <mxPoint x="1475" y="810" as="sourcePoint" />
+            <mxPoint x="885" y="810" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-37" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" value="[Action]" vertex="1">
+          <mxGeometry height="30" width="60" x="985" y="570" as="geometry" />
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-43" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;font style=&quot;font-size: 25px;&quot;&gt;&lt;b style=&quot;&quot;&gt;Sequence Diagram - Alumni Connect - Mobile App&lt;/b&gt;&lt;/font&gt;" vertex="1">
+          <mxGeometry height="10" width="600" x="880" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="51YImgKssclaOs3soTmh-44" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;rounded=0;fontSize=20;" value="Name: Yuvraj Shrirame&lt;div&gt;Roll No: 252010023&lt;/div&gt;" vertex="1">
+          <mxGeometry height="30" width="220" x="880" y="110" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
